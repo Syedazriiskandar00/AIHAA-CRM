@@ -2,11 +2,47 @@ const express = require('express');
 const router = express.Router();
 const { readSheet, updateRows } = require('../services/sheetsService');
 const { validateContact } = require('../services/validator');
-const { COLUMNS, COLUMN_GROUPS, buildHeaderMap, isOldFormat, SMART_COPY_RULES } = require('../config/columns');
+const { COLUMNS, COLUMN_GROUPS, buildHeaderMap, isOldFormat, SMART_COPY_RULES, OLD_FORMAT_DEFAULTS } = require('../config/columns');
 
 // Dynamic: guna query param jika ada, fallback ke env
 const getSpreadsheetId = (req) => req.query.spreadsheetId || process.env.SPREADSHEET_ID;
 const getSheetName = (req) => req.query.sheetName || process.env.SHEET_NAME || 'Worksheet';
+
+// ─── Capitalize first letter of each word ────────────────────
+function capitalizeWords(str) {
+  return str.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// ─── Smart name split: handles bin/binti for Malay names ─────
+// "a rahman bin basiran" → Firstname: "A Rahman", Lastname: "Bin Basiran"
+// "ahmad binti siti"     → Firstname: "Ahmad", Lastname: "Binti Siti"
+// "john smith"           → Firstname: "John", Lastname: "Smith"
+function splitMalayName(fullName) {
+  if (!fullName || !fullName.trim()) return { firstname: '', lastname: '' };
+
+  const name = fullName.trim();
+  const words = name.split(/\s+/);
+
+  if (words.length === 1) {
+    return { firstname: capitalizeWords(words[0]), lastname: '' };
+  }
+
+  // Look for bin/binti (case-insensitive) — split BEFORE bin/binti
+  const binIndex = words.findIndex(
+    (w, i) => i > 0 && /^(bin|binti)$/i.test(w)
+  );
+
+  if (binIndex > 0) {
+    const firstname = capitalizeWords(words.slice(0, binIndex).join(' '));
+    const lastname = capitalizeWords(words.slice(binIndex).join(' '));
+    return { firstname, lastname };
+  }
+
+  // No bin/binti: first word = firstname, rest = lastname
+  const firstname = capitalizeWords(words[0]);
+  const lastname = capitalizeWords(words.slice(1).join(' '));
+  return { firstname, lastname };
+}
 
 // ─── Row mapping with dual old/new header support ───────────
 function mapRow(rawRow, headerMapping, sheetHeaders) {
@@ -17,6 +53,7 @@ function mapRow(rawRow, headerMapping, sheetHeaders) {
   });
   // Metadata fields
   contact._meta = {};
+  const oldFormat = sheetHeaders ? isOldFormat(sheetHeaders) : false;
 
   for (const [header, value] of Object.entries(rawRow)) {
     if (header === '_rowIndex') continue;
@@ -26,15 +63,24 @@ function mapRow(rawRow, headerMapping, sheetHeaders) {
     const val = (value || '').trim();
 
     if (mapping.splitTo) {
-      // "Legal Name (1) *" → split firstname + lastname at first space
-      const parts = val.split(/\s+/);
-      contact[mapping.splitTo[0]] = parts[0] || '';
-      contact[mapping.splitTo[1]] = parts.slice(1).join(' ') || '';
+      // Smart Malay name split with bin/binti handling
+      const { firstname, lastname } = splitMalayName(val);
+      contact[mapping.splitTo[0]] = firstname;
+      contact[mapping.splitTo[1]] = lastname;
     } else if (mapping.meta) {
       // Metadata — not one of 42 columns
       contact._meta[mapping.field] = val;
     } else {
       contact[mapping.field] = val;
+    }
+  }
+
+  // ─── Apply OLD_FORMAT_DEFAULTS (e.g., country = "Malaysia") ─
+  if (oldFormat) {
+    for (const [key, defaultVal] of Object.entries(OLD_FORMAT_DEFAULTS)) {
+      if (!contact[key]) {
+        contact[key] = defaultVal;
+      }
     }
   }
 
@@ -54,6 +100,11 @@ function mapRow(rawRow, headerMapping, sheetHeaders) {
   contact.id = rawRow._rowIndex;
   return contact;
 }
+
+// Export mapRow and helpers for use in auto-detect endpoint
+router._mapRow = mapRow;
+router._isLengkap = isLengkap;
+router._splitMalayName = splitMalayName;
 
 // ─── Completeness check ─────────────────────────────────────
 function isLengkap(contact) {

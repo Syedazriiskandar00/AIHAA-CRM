@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 import { SkeletonTable } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import { Link } from 'react-router-dom';
@@ -36,6 +37,15 @@ export default function Import() {
   const [serviceEmail, setServiceEmail] = useState('');
   const [columnDetection, setColumnDetection] = useState(null);
   const toast = useToast();
+  const confirm = useConfirm();
+
+  // ─── Auto-detect state ──────────────────────────────────────
+  const [autoDetecting, setAutoDetecting] = useState(false);
+  const [autoProgress, setAutoProgress] = useState(null);
+  const [enrichedData, setEnrichedData] = useState(null);
+  const [enrichedStats, setEnrichedStats] = useState(null);
+  const [savingEnriched, setSavingEnriched] = useState(false);
+  const abortRef = useRef(null);
 
   // If we have saved data, auto-load on mount
   useEffect(() => {
@@ -90,6 +100,8 @@ export default function Import() {
     setPreview(null);
     setImportStats(null);
     setColumnDetection(null);
+    setEnrichedData(null);
+    setEnrichedStats(null);
 
     try {
       const res = await axios.post('/api/import/from-url', { url });
@@ -137,6 +149,8 @@ export default function Import() {
   const handleSelectSheet = async (sheet) => {
     setLoadingSheet(true);
     setSelectedSheet(sheet);
+    setEnrichedData(null);
+    setEnrichedStats(null);
 
     try {
       const res = await axios.post('/api/import/select-sheet', {
@@ -175,8 +189,138 @@ export default function Import() {
     setSelectedSheet(null);
     setSpreadsheetId('');
     setColumnDetection(null);
+    setEnrichedData(null);
+    setEnrichedStats(null);
+    setAutoProgress(null);
     localStorage.removeItem(LS_KEY);
   };
+
+  // ─── Auto-Detect & Enrich via SSE ─────────────────────────
+  const handleAutoDetect = async () => {
+    if (!spreadsheetId || !selectedSheet?.title) {
+      toast.error('Sila connect ke Google Sheet dulu.');
+      return;
+    }
+
+    setAutoDetecting(true);
+    setAutoProgress({ current: 0, total: 0, status: 'Memulakan...' });
+    setEnrichedData(null);
+    setEnrichedStats(null);
+
+    try {
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      const response = await fetch('/api/import/auto-detect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          spreadsheetId,
+          sheetName: selectedSheet.title,
+        }),
+        signal: controller.signal,
+      });
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+
+            if (event.type === 'status') {
+              setAutoProgress((prev) => ({ ...prev, status: event.message }));
+            } else if (event.type === 'start') {
+              setAutoProgress({ current: 0, total: event.total, status: 'Memproses data...' });
+            } else if (event.type === 'progress') {
+              setAutoProgress({
+                current: event.current,
+                total: event.total,
+                geocoded: event.geocoded,
+                cacheHits: event.cacheHits,
+                errors: event.errors,
+                status: `Memproses ${event.current.toLocaleString()}/${event.total.toLocaleString()}...`,
+              });
+            } else if (event.type === 'complete') {
+              setEnrichedData(event.data);
+              setEnrichedStats({
+                total: event.total,
+                lengkap: event.lengkap,
+                tidakLengkap: event.tidakLengkap,
+                geocoded: event.geocoded,
+                cacheHits: event.cacheHits,
+                errors: event.errors,
+              });
+              setAutoProgress(null);
+              toast.success(`Berjaya! ${event.total.toLocaleString()} contacts diproses.`);
+            } else if (event.type === 'error') {
+              toast.error(event.message);
+              setAutoProgress(null);
+            }
+          } catch {
+            // Skip malformed SSE lines
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        toast.error('Gagal auto-detect: ' + (err.message || 'Unknown error'));
+      }
+      setAutoProgress(null);
+    } finally {
+      setAutoDetecting(false);
+      abortRef.current = null;
+    }
+  };
+
+  const handleCancelAutoDetect = () => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    setAutoDetecting(false);
+    setAutoProgress(null);
+  };
+
+  // ─── Save enriched data to Google Sheet ─────────────────
+  const handleSaveEnriched = async () => {
+    if (!enrichedData || enrichedData.length === 0) return;
+
+    const ok = await confirm({
+      title: 'Simpan ke Google Sheet?',
+      message: `${enrichedData.length.toLocaleString()} contacts yang telah di-enrich akan ditulis ke Google Sheet. Kolum baru akan ditambah jika belum wujud.`,
+      confirmText: 'Ya, Simpan',
+    });
+    if (!ok) return;
+
+    setSavingEnriched(true);
+    try {
+      const result = await axios.post(
+        `/api/sheets/write?spreadsheetId=${spreadsheetId}&sheetName=${encodeURIComponent(selectedSheet.title)}`,
+        { data: enrichedData }
+      );
+
+      if (result.data.success) {
+        toast.success(`Berjaya disimpan! ${result.data.addedHeaders?.length || 0} columns ditambah.`);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Gagal menyimpan ke Google Sheet.');
+    } finally {
+      setSavingEnriched(false);
+    }
+  };
+
+  // ─── Preview enriched data columns ─────────────────────────
+  const PREVIEW_KEYS = ['firstname', 'lastname', 'contact_phone', 'address', 'city', 'state', 'zip', 'latitude', 'longitude'];
 
   return (
     <div>
@@ -354,7 +498,7 @@ export default function Import() {
       )}
 
       {/* ─── Stats Summary ───────────────────────────────────── */}
-      {importStats && (
+      {importStats && !enrichedStats && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6 max-w-2xl">
           <MiniStat label="Jumlah Baris" value={importStats.total?.toLocaleString()} />
           <MiniStat label="Lengkap" value={importStats.lengkap?.toLocaleString()} color="success" />
@@ -363,8 +507,208 @@ export default function Import() {
         </div>
       )}
 
+      {/* ─── Auto-Detect & Enrich Card ────────────────────────── */}
+      {step === 3 && !enrichedData && (
+        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6 max-w-2xl">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-lg bg-cyan-50 flex items-center justify-center">
+              <svg className="w-5 h-5 text-cyan-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-gray-800">Auto-Detect & Enrich</h3>
+              <p className="text-xs text-gray-400">Smart mapping + Google Maps geocoding untuk semua rows</p>
+            </div>
+          </div>
+
+          <div className="text-xs text-gray-500 mb-4 space-y-1">
+            <p>Sistem akan:</p>
+            <ul className="list-disc list-inside ml-2 space-y-0.5">
+              <li>Map column lama ke format baru (42 columns)</li>
+              <li>Split nama Melayu dengan bin/binti</li>
+              <li>Set country = Malaysia secara automatik</li>
+              <li>Duplicate phone, city, state, zip ke billing/shipping</li>
+              <li>Geocode alamat untuk dapatkan latitude/longitude</li>
+            </ul>
+          </div>
+
+          {/* Progress bar during auto-detect */}
+          {autoProgress && (
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs font-medium text-gray-700">{autoProgress.status}</span>
+                {autoProgress.total > 0 && (
+                  <span className="text-xs text-gray-500">
+                    {Math.round((autoProgress.current / autoProgress.total) * 100)}%
+                  </span>
+                )}
+              </div>
+              <div className="w-full bg-gray-100 rounded-full h-3">
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: autoProgress.total > 0
+                      ? `${Math.round((autoProgress.current / autoProgress.total) * 100)}%`
+                      : '0%',
+                    background: 'linear-gradient(90deg, #06B6D4, #3B82F6)',
+                  }}
+                />
+              </div>
+              {autoProgress.geocoded !== undefined && (
+                <div className="flex items-center gap-4 mt-2 text-[10px] text-gray-500">
+                  <span>Geocoded: {autoProgress.geocoded}</span>
+                  <span>Cache hits: {autoProgress.cacheHits}</span>
+                  {autoProgress.errors > 0 && (
+                    <span className="text-warning">Errors: {autoProgress.errors}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button
+              onClick={handleAutoDetect}
+              disabled={autoDetecting}
+              className="flex-1 px-4 py-2.5 text-sm font-medium bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {autoDetecting ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Sedang memproses...
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  Auto-Detect & Enrich
+                </>
+              )}
+            </button>
+            {autoDetecting && (
+              <button
+                onClick={handleCancelAutoDetect}
+                className="px-4 py-2.5 text-sm font-medium bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200"
+              >
+                Batal
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Enriched Results ──────────────────────────────────── */}
+      {enrichedData && enrichedStats && (
+        <div className="mb-6 max-w-4xl">
+          {/* Enriched Stats */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+            <MiniStat label="Jumlah" value={enrichedStats.total?.toLocaleString()} />
+            <MiniStat label="Lengkap" value={enrichedStats.lengkap?.toLocaleString()} color="success" />
+            <MiniStat label="Tidak Lengkap" value={enrichedStats.tidakLengkap?.toLocaleString()} color="warning" />
+            <MiniStat label="Geocoded" value={enrichedStats.geocoded?.toLocaleString()} color="primary" />
+            <MiniStat label="Cache Hits" value={enrichedStats.cacheHits?.toLocaleString()} />
+            {enrichedStats.errors > 0 && (
+              <MiniStat label="Errors" value={enrichedStats.errors?.toLocaleString()} color="warning" />
+            )}
+          </div>
+
+          {/* Enriched Preview Table */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-4">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-800">Preview Enriched Data</h3>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {enrichedData.length.toLocaleString()} contacts — 10 baris pertama
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setEnrichedData(null); setEnrichedStats(null); }}
+                  className="px-3 py-1.5 text-xs font-medium bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50/80 border-b border-gray-200">
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">#</th>
+                    {PREVIEW_KEYS.map((key) => {
+                      const col = COLUMNS.find((c) => c.key === key);
+                      return (
+                        <th key={key} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">
+                          {col?.label || key}
+                        </th>
+                      );
+                    })}
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {enrichedData.slice(0, 10).map((c, idx) => {
+                    const isLengkap = c.status === 'Lengkap';
+                    return (
+                      <tr
+                        key={c.id || idx}
+                        className={`border-b border-gray-100 ${isLengkap ? 'bg-green-50/30' : ''}`}
+                      >
+                        <td className="px-4 py-2.5 text-xs text-gray-400">{c.id || idx + 2}</td>
+                        {PREVIEW_KEYS.map((key) => (
+                          <td key={key} className="px-4 py-2.5 text-gray-600 max-w-[200px] truncate">
+                            {c[key] || <span className="text-gray-300 italic">-</span>}
+                          </td>
+                        ))}
+                        <td className="px-4 py-2.5">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                            isLengkap ? 'bg-success-light text-success' : 'bg-warning-light text-warning'
+                          }`}>
+                            {isLengkap ? 'Lengkap' : 'Tidak Lengkap'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Save Button */}
+          <button
+            onClick={handleSaveEnriched}
+            disabled={savingEnriched}
+            className="w-full max-w-md px-6 py-3 text-sm font-medium bg-success text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {savingEnriched ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Menyimpan...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                Simpan ke Format Baru ({enrichedData.length.toLocaleString()} contacts)
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
       {/* ─── Step 3: Preview Table ───────────────────────────── */}
-      {step === 3 && (
+      {step === 3 && !enrichedData && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
             <div>

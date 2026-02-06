@@ -104,6 +104,12 @@ const SMART_COPY_RULES = {
   email:         ['email_address'],
 };
 
+// ─── Default values for old-format sheets ─────────────────────
+// Applied after mapping when sheet is old format
+const OLD_FORMAT_DEFAULTS = {
+  country: 'Malaysia',
+};
+
 // ─── Detect sheet format ─────────────────────────────────────
 function isOldFormat(sheetHeaders) {
   const headerSet = new Set(sheetHeaders.map((h) => (h || '').trim()));
@@ -160,6 +166,7 @@ module.exports = {
   OLD_HEADER_MAP,
   ALL_HEADERS,
   SMART_COPY_RULES,
+  OLD_FORMAT_DEFAULTS,
   buildHeaderMap,
   isOldFormat,
 };
