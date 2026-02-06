@@ -5,7 +5,22 @@ import { useConfirm } from '../components/ConfirmDialog';
 import { SkeletonCard } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 
+const LS_KEY = 'aihaa_crm_sheet';
+
+function getSaved() {
+  try {
+    return JSON.parse(localStorage.getItem(LS_KEY)) || null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Export() {
+  const saved = getSaved();
+  const spreadsheetId = saved?.spreadsheetId || '';
+  const sheetName = saved?.sheetName || '';
+  const sheetUrl = saved?.url || '';
+
   const [stats, setStats] = useState(null);
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -15,12 +30,16 @@ export default function Export() {
   const toast = useToast();
   const confirm = useConfirm();
 
-  const spreadsheetId = import.meta.env?.VITE_SPREADSHEET_ID || '';
+  const qp = spreadsheetId ? `spreadsheetId=${spreadsheetId}&sheetName=${encodeURIComponent(sheetName)}` : '';
 
   useEffect(() => {
+    if (!spreadsheetId) {
+      setLoading(false);
+      return;
+    }
     Promise.all([
-      axios.get('/api/stats'),
-      axios.get('/api/contacts?page=1&limit=5'),
+      axios.get(`/api/contacts/stats?${qp}`),
+      axios.get(`/api/contacts?page=1&limit=5&${qp}`),
     ])
       .then(([statsRes, previewRes]) => {
         if (statsRes.data.success) setStats(statsRes.data);
@@ -28,10 +47,16 @@ export default function Export() {
       })
       .catch(() => toast.error('Gagal memuatkan data.'))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Sync back to Google Sheet
   const handleSync = async () => {
+    if (!spreadsheetId) {
+      toast.error('Tiada spreadsheet yang disambungkan. Sila import dulu.');
+      return;
+    }
+
     const ok = await confirm({
       title: 'Sync ke Google Sheet?',
       message: 'Data enrichment akan ditulis ke Google Sheet yang sama. Data asal tidak akan ditimpa — hanya kolum enrichment baru akan ditambah.',
@@ -43,7 +68,7 @@ export default function Export() {
     setSyncResult(null);
     try {
       // Fetch all contacts
-      const res = await axios.get('/api/contacts?page=1&limit=50000');
+      const res = await axios.get(`/api/contacts?page=1&limit=50000&${qp}`);
       if (!res.data.success || res.data.data.length === 0) {
         toast.error('Tiada data untuk di-sync.');
         return;
@@ -86,7 +111,7 @@ export default function Export() {
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      const res = await axios.get('/api/contacts?page=1&limit=50000');
+      const res = await axios.get(`/api/contacts?page=1&limit=50000&${qp}`);
       if (!res.data.success || res.data.data.length === 0) {
         toast.error('Tiada data untuk dimuat turun.');
         return;
@@ -142,7 +167,7 @@ export default function Export() {
     );
   }
 
-  if (!stats || stats.total === 0) {
+  if (!spreadsheetId || !stats || stats.total === 0) {
     return (
       <div>
         <div className="mb-8">
@@ -152,12 +177,16 @@ export default function Export() {
           <EmptyState
             icon="📤"
             title="Tiada data untuk export"
-            description="Import data terlebih dahulu sebelum export."
+            description={!spreadsheetId ? 'Sila import data terlebih dahulu dari halaman Import.' : 'Import data terlebih dahulu sebelum export.'}
           />
         </div>
       </div>
     );
   }
+
+  const googleSheetUrl = spreadsheetId
+    ? `https://docs.google.com/spreadsheets/d/${spreadsheetId}`
+    : sheetUrl;
 
   return (
     <div>
@@ -166,6 +195,17 @@ export default function Export() {
         <h2 className="text-2xl font-bold text-gray-900">Export Data</h2>
         <p className="text-sm text-gray-500 mt-1">Sync ke Google Sheet atau muat turun sebagai fail</p>
       </div>
+
+      {/* Connected info */}
+      {spreadsheetId && (
+        <div className="flex items-center gap-2 mb-6">
+          <span className="flex items-center gap-1.5 px-3 py-1 bg-success-light text-success text-xs font-medium rounded-full">
+            <span className="w-2 h-2 rounded-full bg-success" />
+            Connected
+          </span>
+          <span className="text-xs text-gray-500">Sheet: <strong>{sheetName}</strong></span>
+        </div>
+      )}
 
       {/* Stats Overview */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
@@ -226,15 +266,17 @@ export default function Export() {
                 <span className="text-sm font-medium text-success">Berjaya di-sync!</span>
               </div>
               <p className="text-xs text-green-700">{syncResult.rows} baris pada {syncResult.timestamp}</p>
-              <a
-                href={`https://docs.google.com/spreadsheets/d/${import.meta.env?.VITE_SPREADSHEET_ID || '10XQICyn6Co7Vvlz6_RUKpk4sPZc8BLbOmyLMdGJhf8c'}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-success hover:underline"
-              >
-                Buka Google Sheet
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-              </a>
+              {googleSheetUrl && (
+                <a
+                  href={googleSheetUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-success hover:underline"
+                >
+                  Buka Google Sheet
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                </a>
+              )}
             </div>
           )}
         </div>

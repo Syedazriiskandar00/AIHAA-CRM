@@ -342,11 +342,30 @@ async function testConnection(spreadsheetId, sheetName) {
   }
 }
 
+// ─── listSheets ──────────────────────────────────────────────
+// Return semua sheet names dalam spreadsheet
+async function listSheets(spreadsheetId) {
+  try {
+    const sheets = await getClient();
+    const res = await sheets.spreadsheets.get({
+      spreadsheetId,
+      fields: 'sheets.properties(sheetId,title)',
+    });
+    return (res.data.sheets || []).map((s) => ({
+      sheetId: s.properties.sheetId,
+      title: s.properties.title,
+    }));
+  } catch (error) {
+    throw wrapError(error);
+  }
+}
+
 module.exports = {
   readSheet,
   writeSheet,
   updateRows,
   testConnection,
+  listSheets,
   getClient,
   getServiceAccountEmail,
   ENRICHMENT_HEADERS,

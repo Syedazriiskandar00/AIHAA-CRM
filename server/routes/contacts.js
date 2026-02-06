@@ -3,8 +3,9 @@ const router = express.Router();
 const { readSheet, updateRows, getClient } = require('../services/sheetsService');
 const { validateEnrichment, NEGERI_LIST } = require('../services/validator');
 
-const getSpreadsheetId = () => process.env.SPREADSHEET_ID;
-const getSheetName = () => process.env.SHEET_NAME || 'Worksheet';
+// Dynamic: guna query param jika ada, fallback ke env
+const getSpreadsheetId = (req) => req.query.spreadsheetId || process.env.SPREADSHEET_ID;
+const getSheetName = (req) => req.query.sheetName || process.env.SHEET_NAME || 'Worksheet';
 
 // ─── Column mapping ────────────────────────────────────────
 // Map header spreadsheet → field name yang konsisten
@@ -56,7 +57,7 @@ router.get('/', async (req, res) => {
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 50));
     const search = (req.query.search || '').trim().toLowerCase();
 
-    const { data } = await readSheet(getSpreadsheetId(), getSheetName());
+    const { data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
 
     // Map semua rows
     let contacts = data.map((row) => {
@@ -124,7 +125,7 @@ router.put('/bulk', async (req, res) => {
     }
 
     // Baca data semasa untuk determine status
-    const { data } = await readSheet(getSpreadsheetId(), getSheetName());
+    const { data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
     const timestamp = new Date().toISOString();
 
     const batchUpdates = ids.map((id) => {
@@ -149,7 +150,7 @@ router.put('/bulk', async (req, res) => {
       };
     });
 
-    const result = await updateRows(getSpreadsheetId(), getSheetName(), batchUpdates);
+    const result = await updateRows(getSpreadsheetId(req), getSheetName(req), batchUpdates);
 
     res.json({
       success: true,
@@ -181,7 +182,7 @@ router.put('/:id', async (req, res) => {
     }
 
     // Baca data row semasa untuk determine status
-    const { data } = await readSheet(getSpreadsheetId(), getSheetName());
+    const { data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
     const currentRow = data.find((r) => r._rowIndex === rowNum);
     if (!currentRow) {
       return res.status(404).json({ success: false, error: `Row ${rowNum} tidak dijumpai dalam sheet.` });
@@ -195,7 +196,7 @@ router.put('/:id', async (req, res) => {
 
     const status = isLengkap(merged) ? 'Lengkap' : 'Tidak Lengkap';
 
-    const result = await updateRows(getSpreadsheetId(), getSheetName(), [
+    const result = await updateRows(getSpreadsheetId(req), getSheetName(req), [
       {
         row: rowNum,
         poskod: validation.cleaned.poskod,
@@ -222,7 +223,7 @@ router.put('/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 router.get('/stats', async (req, res) => {
   try {
-    const { data } = await readSheet(getSpreadsheetId(), getSheetName());
+    const { data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
 
     const contacts = data
       .map((row) => {
