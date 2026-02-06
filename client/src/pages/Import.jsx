@@ -4,6 +4,7 @@ import { useToast } from '../components/Toast';
 import { SkeletonTable } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import { Link } from 'react-router-dom';
+import { COLUMNS, COLUMN_GROUPS, detectColumns } from '../config/columns';
 
 const LS_KEY = 'aihaa_crm_sheet';
 
@@ -22,7 +23,7 @@ function saveTo(data) {
 export default function Import() {
   const saved = getSaved();
   const [urlInput, setUrlInput] = useState(saved?.url || '');
-  const [step, setStep] = useState(1); // 1=paste, 2=pick sheet, 3=preview
+  const [step, setStep] = useState(1);
   const [connecting, setConnecting] = useState(false);
   const [spreadsheetId, setSpreadsheetId] = useState(saved?.spreadsheetId || '');
   const [sheets, setSheets] = useState([]);
@@ -33,6 +34,7 @@ export default function Import() {
   const [importStats, setImportStats] = useState(null);
   const [loadingSheet, setLoadingSheet] = useState(false);
   const [serviceEmail, setServiceEmail] = useState('');
+  const [columnDetection, setColumnDetection] = useState(null);
   const toast = useToast();
 
   // If we have saved data, auto-load on mount
@@ -40,7 +42,6 @@ export default function Import() {
     if (saved?.spreadsheetId && saved?.sheetName) {
       setSpreadsheetId(saved.spreadsheetId);
       setSelectedSheet({ title: saved.sheetName });
-      // Auto-fetch preview
       handleAutoLoad(saved.spreadsheetId, saved.sheetName);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -56,19 +57,19 @@ export default function Import() {
         setPreview(res.data.preview);
         setTotalRows(res.data.totalRows);
         setHeaders(res.data.headers);
+        setColumnDetection(detectColumns(res.data.headers));
         setStep(3);
-        // Load stats
         const statsRes = await axios.get(
           `/api/contacts/stats?spreadsheetId=${sid}&sheetName=${encodeURIComponent(sname)}`
         );
         if (statsRes.data.success) setImportStats(statsRes.data);
       }
     } catch {
-      // Silently fail auto-load, user can reconnect
+      // Silently fail auto-load
     }
   };
 
-  // ─── Step 1: Connect via URL ─────────────────────────────
+  // ─── Step 1: Connect via URL ──────────────────────────────
   const handleConnect = async () => {
     const url = urlInput.trim();
     if (!url) {
@@ -76,7 +77,6 @@ export default function Import() {
       return;
     }
 
-    // Basic client-side validation
     if (!url.startsWith('https://docs.google.com/spreadsheets/')) {
       if (url.includes('drive.google.com') || url.includes('.xlsx') || url.includes('.xls')) {
         toast.error('File ini adalah Excel. Sila buka dan klik File > Save as Google Sheets dulu.');
@@ -89,6 +89,7 @@ export default function Import() {
     setConnecting(true);
     setPreview(null);
     setImportStats(null);
+    setColumnDetection(null);
 
     try {
       const res = await axios.post('/api/import/from-url', { url });
@@ -103,17 +104,16 @@ export default function Import() {
         setTotalRows(total);
         setHeaders(hdrs);
         setServiceEmail(serviceAccountEmail || '');
+        setColumnDetection(detectColumns(hdrs));
 
-        // Save to localStorage
         saveTo({ url, spreadsheetId: sid, sheetName: sel.title });
 
         if (sheetList.length > 1) {
-          setStep(2); // Show sheet picker
+          setStep(2);
           toast.success(`Berjaya connect! ${sheetList.length} sheets dijumpai. Pilih sheet.`);
         } else {
-          setStep(3); // Direct to preview
+          setStep(3);
           toast.success(`Berjaya connect! ${total.toLocaleString()} baris dijumpai.`);
-          // Load stats
           const statsRes = await axios.get(
             `/api/contacts/stats?spreadsheetId=${sid}&sheetName=${encodeURIComponent(sel.title)}`
           );
@@ -133,7 +133,7 @@ export default function Import() {
     }
   };
 
-  // ─── Step 2: Select a different sheet ────────────────────
+  // ─── Step 2: Select a different sheet ─────────────────────
   const handleSelectSheet = async (sheet) => {
     setLoadingSheet(true);
     setSelectedSheet(sheet);
@@ -148,14 +148,12 @@ export default function Import() {
         setPreview(res.data.preview);
         setTotalRows(res.data.totalRows);
         setHeaders(res.data.headers);
+        setColumnDetection(detectColumns(res.data.headers));
         setStep(3);
 
-        // Update saved
         saveTo({ url: urlInput, spreadsheetId, sheetName: sheet.title });
-
         toast.success(`Sheet "${sheet.title}" — ${res.data.totalRows.toLocaleString()} baris.`);
 
-        // Load stats
         const statsRes = await axios.get(
           `/api/contacts/stats?spreadsheetId=${spreadsheetId}&sheetName=${encodeURIComponent(sheet.title)}`
         );
@@ -168,7 +166,7 @@ export default function Import() {
     }
   };
 
-  // ─── Disconnect / Reset ──────────────────────────────────
+  // ─── Disconnect / Reset ───────────────────────────────────
   const handleDisconnect = () => {
     setStep(1);
     setPreview(null);
@@ -176,6 +174,7 @@ export default function Import() {
     setSheets([]);
     setSelectedSheet(null);
     setSpreadsheetId('');
+    setColumnDetection(null);
     localStorage.removeItem(LS_KEY);
   };
 
@@ -187,7 +186,7 @@ export default function Import() {
         <p className="text-sm text-gray-500 mt-1">Paste URL Google Sheet untuk import contacts</p>
       </div>
 
-      {/* ─── Step 1: URL Input Card ─────────────────────────── */}
+      {/* ─── Step 1: URL Input Card ──────────────────────────── */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6 max-w-2xl">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-lg bg-primary-50 flex items-center justify-center">
@@ -270,7 +269,7 @@ export default function Import() {
         )}
       </div>
 
-      {/* ─── Step 2: Sheet Picker ───────────────────────────── */}
+      {/* ─── Step 2: Sheet Picker ────────────────────────────── */}
       {step === 2 && sheets.length > 1 && (
         <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6 max-w-2xl">
           <h3 className="text-sm font-semibold text-gray-800 mb-3">Pilih Sheet</h3>
@@ -311,7 +310,50 @@ export default function Import() {
         </div>
       )}
 
-      {/* ─── Stats Summary ──────────────────────────────────── */}
+      {/* ─── Column Detection Summary ────────────────────────── */}
+      {columnDetection && step >= 3 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6 max-w-2xl">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-gray-800">Column Coverage</h3>
+            <span className="text-sm font-bold text-primary">
+              {columnDetection.detectedCount} / {columnDetection.total}
+            </span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="w-full bg-gray-100 rounded-full h-2.5 mb-4">
+            <div
+              className="h-full rounded-full transition-all duration-500"
+              style={{
+                width: `${Math.round((columnDetection.detectedCount / columnDetection.total) * 100)}%`,
+                background: 'linear-gradient(90deg, #c8553a, #e8854a)',
+              }}
+            />
+          </div>
+
+          {/* Per-group coverage */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {Object.entries(COLUMN_GROUPS).map(([groupKey, group]) => {
+              const groupCols = COLUMNS.filter((c) => c.group === groupKey);
+              const detectedInGroup = groupCols.filter((c) => columnDetection.detected.includes(c.key)).length;
+              const pct = Math.round((detectedInGroup / groupCols.length) * 100);
+              return (
+                <div key={groupKey} className="text-center p-2 rounded-lg" style={{ backgroundColor: group.color + '10' }}>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: group.color }}>
+                    {group.label}
+                  </p>
+                  <p className="text-lg font-bold text-gray-900">{detectedInGroup}/{groupCols.length}</p>
+                  <div className="w-full bg-gray-200 rounded-full h-1 mt-1">
+                    <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: group.color }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Stats Summary ───────────────────────────────────── */}
       {importStats && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6 max-w-2xl">
           <MiniStat label="Jumlah Baris" value={importStats.total?.toLocaleString()} />
@@ -321,7 +363,7 @@ export default function Import() {
         </div>
       )}
 
-      {/* ─── Step 3: Preview Table ──────────────────────────── */}
+      {/* ─── Step 3: Preview Table ───────────────────────────── */}
       {step === 3 && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
@@ -332,7 +374,7 @@ export default function Import() {
               </p>
             </div>
             <Link
-              to={`/contacts?spreadsheetId=${spreadsheetId}&sheetName=${encodeURIComponent(selectedSheet?.title || '')}`}
+              to="/contacts"
               className="px-4 py-2 text-xs font-medium bg-primary text-white rounded-lg hover:bg-primary-dark inline-flex items-center gap-1"
             >
               Lihat Semua
@@ -346,40 +388,37 @@ export default function Import() {
               <thead>
                 <tr className="bg-gray-50/80 border-b border-gray-200">
                   <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">#</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Nama</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Telefon</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Alamat</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Negeri</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Poskod</th>
+                  {headers.slice(0, 10).map((h, idx) => (
+                    <th key={idx} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">
+                      {h}
+                    </th>
+                  ))}
+                  {headers.length > 10 && (
+                    <th className="text-left px-4 py-2.5 text-xs text-gray-400">+{headers.length - 10} lagi</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {!preview ? (
-                  <SkeletonTable rows={5} cols={6} />
+                  <SkeletonTable rows={5} cols={Math.min(headers.length, 10) + 1} />
                 ) : preview.length === 0 ? (
                   <tr>
-                    <td colSpan={6}>
+                    <td colSpan={Math.min(headers.length, 10) + 1}>
                       <EmptyState icon="📄" title="Sheet kosong" description="Tiada data dalam sheet ini." />
                     </td>
                   </tr>
                 ) : (
                   preview.map((row, idx) => {
-                    // Preview data is raw from sheet — show first few relevant columns
-                    const nama = row['Legal Name (1) *'] || row.nama || Object.values(row)[0] || '';
-                    const telefon = row['Contact No. (14)'] || row.telefon || '';
-                    const alamat = row['Street +'] || row.alamat || '';
-                    const negeri = row['State (17)'] || row.negeri || '';
-                    const poskod = row['Postcode'] || row.poskod || '';
                     const id = row._rowIndex || idx + 2;
-                    const isLengkap = !!(nama && telefon && poskod && alamat && negeri);
                     return (
-                      <tr key={id} className={`border-b border-gray-100 ${isLengkap ? 'bg-success-light/20' : 'bg-warning-light/15'}`}>
+                      <tr key={id} className="border-b border-gray-100 hover:bg-gray-50/50">
                         <td className="px-4 py-2.5 text-xs text-gray-400">{id}</td>
-                        <td className="px-4 py-2.5 font-medium text-gray-900 whitespace-nowrap">{nama}</td>
-                        <td className="px-4 py-2.5 text-gray-600">{telefon}</td>
-                        <td className="px-4 py-2.5 text-gray-600 max-w-[200px] truncate">{alamat}</td>
-                        <td className="px-4 py-2.5 text-gray-600">{negeri || <span className="text-gray-300 italic">kosong</span>}</td>
-                        <td className="px-4 py-2.5 text-gray-600">{poskod || <span className="text-gray-300 italic">kosong</span>}</td>
+                        {headers.slice(0, 10).map((h, hIdx) => (
+                          <td key={hIdx} className="px-4 py-2.5 text-gray-600 max-w-[200px] truncate">
+                            {row[h] || <span className="text-gray-300 italic">kosong</span>}
+                          </td>
+                        ))}
+                        {headers.length > 10 && <td className="px-4 py-2.5 text-gray-300">...</td>}
                       </tr>
                     );
                   })
@@ -410,7 +449,7 @@ export default function Import() {
         </div>
       )}
 
-      {/* ─── Empty state when not connected ─────────────────── */}
+      {/* ─── Empty state when not connected ──────────────────── */}
       {step === 1 && !connecting && (
         <div className="bg-white rounded-xl border border-gray-200">
           <EmptyState

@@ -1,51 +1,80 @@
 const express = require('express');
 const router = express.Router();
-const { readSheet, updateRows, getClient } = require('../services/sheetsService');
-const { validateEnrichment, NEGERI_LIST } = require('../services/validator');
+const { readSheet, updateRows } = require('../services/sheetsService');
+const { validateContact } = require('../services/validator');
+const { COLUMNS, COLUMN_GROUPS, buildHeaderMap } = require('../config/columns');
 
 // Dynamic: guna query param jika ada, fallback ke env
 const getSpreadsheetId = (req) => req.query.spreadsheetId || process.env.SPREADSHEET_ID;
 const getSheetName = (req) => req.query.sheetName || process.env.SHEET_NAME || 'Worksheet';
 
-// ─── Column mapping ────────────────────────────────────────
-// Map header spreadsheet → field name yang konsisten
-const HEADER_MAP = {
-  '$': 'id_asal',
-  'Legal Name (1) *': 'nama',
-  'Contact No. (14)': 'telefon',
-  'Street +': 'alamat',
-  'City': 'city',
-  'State (17)': 'negeri',
-  'Postcode': 'poskod',
-  'Tags (21)': 'tags',
-  'Myinvois Action (22)': 'myinvois_action',
-  'Status': 'status',
-  'Last_Updated': 'last_updated',
-};
+// ─── Row mapping with dual old/new header support ───────────
+function mapRow(rawRow, headerMapping) {
+  const contact = {};
+  // Initialize all 42 fields to ''
+  COLUMNS.forEach((col) => {
+    contact[col.key] = '';
+  });
+  // Metadata fields
+  contact._meta = {};
 
-// Reverse map: field name → header name in sheet
-const FIELD_TO_HEADER = {};
-for (const [header, field] of Object.entries(HEADER_MAP)) {
-  FIELD_TO_HEADER[field] = header;
-}
+  for (const [header, value] of Object.entries(rawRow)) {
+    if (header === '_rowIndex') continue;
+    const mapping = headerMapping[header];
+    if (!mapping) continue;
 
-function mapRow(rawRow) {
-  const mapped = {};
-  for (const [header, field] of Object.entries(HEADER_MAP)) {
-    mapped[field] = rawRow[header] || '';
-  }
-  // Juga salin field yang tak ada dalam HEADER_MAP
-  for (const key of Object.keys(rawRow)) {
-    if (!HEADER_MAP[key] && key !== '_rowIndex') {
-      mapped[key] = rawRow[key];
+    const val = (value || '').trim();
+
+    if (mapping.splitTo) {
+      // "Legal Name (1) *" → split firstname + lastname at first space
+      const parts = val.split(/\s+/);
+      contact[mapping.splitTo[0]] = parts[0] || '';
+      contact[mapping.splitTo[1]] = parts.slice(1).join(' ') || '';
+    } else if (mapping.meta) {
+      // Metadata — not one of 42 columns
+      contact._meta[mapping.field] = val;
+    } else {
+      contact[mapping.field] = val;
+      // Copy to linked fields
+      if (mapping.copyTo) {
+        mapping.copyTo.forEach((target) => {
+          if (!contact[target]) contact[target] = val;
+        });
+      }
     }
   }
-  mapped.id = rawRow._rowIndex; // row number in sheet = contact id
-  return mapped;
+
+  // Default country to Malaysia if empty
+  if (!contact.country) contact.country = 'Malaysia';
+
+  contact.id = rawRow._rowIndex;
+  return contact;
 }
 
+// ─── Completeness check ─────────────────────────────────────
 function isLengkap(contact) {
-  return !!(contact.nama && contact.telefon && contact.poskod && contact.alamat && contact.negeri);
+  return !!(
+    contact.firstname &&
+    contact.contact_phone &&
+    contact.zip &&
+    contact.address &&
+    contact.state
+  );
+}
+
+// ─── Per-group completeness ─────────────────────────────────
+function getGroupCompleteness(contact) {
+  const result = {};
+  for (const [groupKey] of Object.entries(COLUMN_GROUPS)) {
+    const groupCols = COLUMNS.filter((c) => c.group === groupKey);
+    const filled = groupCols.filter((c) => !!contact[c.key]).length;
+    result[groupKey] = {
+      filled,
+      total: groupCols.length,
+      pct: Math.round((filled / groupCols.length) * 100),
+    };
+  }
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -57,46 +86,41 @@ router.get('/', async (req, res) => {
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 50));
     const search = (req.query.search || '').trim().toLowerCase();
 
-    const { data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
+    const { headers, data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
+    const headerMapping = buildHeaderMap(headers);
 
     // Map semua rows
     let contacts = data.map((row) => {
-      const mapped = mapRow(row);
+      const mapped = mapRow(row, headerMapping);
       mapped.status = isLengkap(mapped) ? 'Lengkap' : 'Tidak Lengkap';
       return mapped;
     });
 
-    // Filter: skip row kosong (tiada nama langsung)
-    contacts = contacts.filter((c) => c.nama);
+    // Filter empty rows (no firstname)
+    contacts = contacts.filter((c) => c.firstname || c.lastname || c.contact_phone || c.email);
 
     // Search
     if (search) {
       contacts = contacts.filter((c) => {
-        return (
-          c.nama.toLowerCase().includes(search) ||
-          c.telefon.toLowerCase().includes(search) ||
-          c.alamat.toLowerCase().includes(search) ||
-          c.city.toLowerCase().includes(search) ||
-          c.negeri.toLowerCase().includes(search) ||
-          c.poskod.toLowerCase().includes(search)
-        );
+        const searchFields = [
+          c.firstname, c.lastname, c.email, c.contact_phone,
+          c.address, c.city, c.state, c.zip, c.company_name,
+          c.phonenumber, c.email_address,
+        ];
+        return searchFields.some((f) => f && f.toLowerCase().includes(search));
       });
     }
 
+    // Pagination
     const total = contacts.length;
     const totalPages = Math.ceil(total / limit);
-    const offset = (page - 1) * limit;
-    const paged = contacts.slice(offset, offset + limit);
+    const start = (page - 1) * limit;
+    const paged = contacts.slice(start, start + limit);
 
     res.json({
       success: true,
       data: paged,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages,
-      },
+      pagination: { page, limit, total, totalPages },
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -104,49 +128,46 @@ router.get('/', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// PUT /api/contacts/bulk  (MESTI sebelum /:id supaya tak clash)
-// Body: { ids: [2,3,5], updates: { negeri: "Selangor" } }
+// PUT /api/contacts/bulk
+// Body: { ids: [2,3,5], updates: { field: value, ... } }
 // ═══════════════════════════════════════════════════════════
 router.put('/bulk', async (req, res) => {
   try {
     const { ids, updates } = req.body;
 
     if (!ids || !Array.isArray(ids) || ids.length === 0) {
-      return res.status(400).json({ success: false, error: 'ids mesti array dan tidak boleh kosong.' });
+      return res.status(400).json({ success: false, error: 'ids[] diperlukan.' });
     }
     if (!updates || typeof updates !== 'object') {
       return res.status(400).json({ success: false, error: 'updates diperlukan.' });
     }
 
-    // Validate enrichment fields
-    const validation = validateEnrichment(updates);
+    // Validate all fields
+    const validation = validateContact(updates);
     if (!validation.valid) {
       return res.status(400).json({ success: false, errors: validation.errors });
     }
 
     // Baca data semasa untuk determine status
-    const { data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
-    const timestamp = new Date().toISOString();
+    const { headers, data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
+    const headerMapping = buildHeaderMap(headers);
 
     const batchUpdates = ids.map((id) => {
       const rowNum = parseInt(id);
-      // Cari row data semasa untuk check completeness
       const currentRow = data.find((r) => r._rowIndex === rowNum);
-      const merged = currentRow ? { ...mapRow(currentRow) } : {};
+      const merged = currentRow ? mapRow(currentRow, headerMapping) : {};
 
       // Apply updates
-      if (validation.cleaned.poskod) merged.poskod = validation.cleaned.poskod;
-      if (validation.cleaned.alamat) merged.alamat = validation.cleaned.alamat;
-      if (validation.cleaned.negeri) merged.negeri = validation.cleaned.negeri;
+      for (const [k, v] of Object.entries(validation.cleaned)) {
+        merged[k] = v;
+      }
 
       const status = isLengkap(merged) ? 'Lengkap' : 'Tidak Lengkap';
 
       return {
         row: rowNum,
-        poskod: validation.cleaned.poskod,
-        alamat: validation.cleaned.alamat,
-        negeri: validation.cleaned.negeri,
-        status,
+        ...validation.cleaned,
+        client_type: status,
       };
     });
 
@@ -164,53 +185,53 @@ router.put('/bulk', async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════
 // PUT /api/contacts/:id
-// Body: { poskod, alamat, negeri }
+// Body: { field: value, ... } — any of 42 fields
 // ═══════════════════════════════════════════════════════════
 router.put('/:id', async (req, res) => {
   try {
     const rowNum = parseInt(req.params.id);
     if (isNaN(rowNum) || rowNum < 2) {
-      return res.status(400).json({ success: false, error: 'ID tidak sah. Mesti >= 2 (row 1 = header).' });
+      return res.status(400).json({ success: false, error: 'ID tidak sah.' });
     }
 
-    const { poskod, alamat, negeri } = req.body;
+    const body = req.body;
+    if (!body || Object.keys(body).length === 0) {
+      return res.status(400).json({ success: false, error: 'Tiada data untuk dikemaskini.' });
+    }
 
     // Validate
-    const validation = validateEnrichment({ poskod, alamat, negeri });
+    const validation = validateContact(body);
     if (!validation.valid) {
       return res.status(400).json({ success: false, errors: validation.errors });
     }
 
     // Baca data row semasa untuk determine status
-    const { data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
+    const { headers, data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
+    const headerMapping = buildHeaderMap(headers);
     const currentRow = data.find((r) => r._rowIndex === rowNum);
     if (!currentRow) {
       return res.status(404).json({ success: false, error: `Row ${rowNum} tidak dijumpai dalam sheet.` });
     }
 
     // Merge existing + new data untuk check completeness
-    const merged = mapRow(currentRow);
-    if (validation.cleaned.poskod) merged.poskod = validation.cleaned.poskod;
-    if (validation.cleaned.alamat) merged.alamat = validation.cleaned.alamat;
-    if (validation.cleaned.negeri) merged.negeri = validation.cleaned.negeri;
+    const merged = mapRow(currentRow, headerMapping);
+    for (const [k, v] of Object.entries(validation.cleaned)) {
+      merged[k] = v;
+    }
 
     const status = isLengkap(merged) ? 'Lengkap' : 'Tidak Lengkap';
 
     const result = await updateRows(getSpreadsheetId(req), getSheetName(req), [
       {
         row: rowNum,
-        poskod: validation.cleaned.poskod,
-        alamat: validation.cleaned.alamat,
-        negeri: validation.cleaned.negeri,
-        status,
+        ...validation.cleaned,
+        client_type: status,
       },
     ]);
 
     res.json({
       success: true,
       message: `Contact row ${rowNum} dikemaskini.`,
-      contact: merged,
-      status,
       ...result,
     });
   } catch (error) {
@@ -223,36 +244,70 @@ router.put('/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 router.get('/stats', async (req, res) => {
   try {
-    const { data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
+    const { headers, data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
+    const headerMapping = buildHeaderMap(headers);
 
     const contacts = data
       .map((row) => {
-        const mapped = mapRow(row);
+        const mapped = mapRow(row, headerMapping);
         mapped.status = isLengkap(mapped) ? 'Lengkap' : 'Tidak Lengkap';
         return mapped;
       })
-      .filter((c) => c.nama); // skip empty rows
+      .filter((c) => c.firstname || c.lastname || c.contact_phone || c.email);
 
     const total = contacts.length;
     const lengkap = contacts.filter((c) => c.status === 'Lengkap').length;
     const tidakLengkap = total - lengkap;
-    const peratusan = total > 0 ? Math.round((lengkap / total) * 10000) / 100 : 0;
+    const peratusan = total > 0 ? Math.round((lengkap / total) * 100) : 0;
 
-    // Breakdown by negeri
-    const byNegeri = {};
-    for (const c of contacts) {
-      const neg = c.negeri || '(Tiada)';
-      if (!byNegeri[neg]) {
-        byNegeri[neg] = { total: 0, lengkap: 0, tidakLengkap: 0 };
-      }
-      byNegeri[neg].total++;
-      if (c.status === 'Lengkap') byNegeri[neg].lengkap++;
-      else byNegeri[neg].tidakLengkap++;
+    // ─── Per-group average completion ────────────────────
+    const groupTotals = {};
+    for (const gk of Object.keys(COLUMN_GROUPS)) {
+      groupTotals[gk] = { sumPct: 0, count: 0 };
     }
 
-    // Sort by total descending
-    const negeriBreakdown = Object.entries(byNegeri)
-      .map(([negeri, counts]) => ({ negeri, ...counts }))
+    // ─── Per-field fill rate ─────────────────────────────
+    const fieldFill = {};
+    COLUMNS.forEach((col) => {
+      fieldFill[col.key] = { label: col.label, group: col.group, filled: 0 };
+    });
+
+    contacts.forEach((c) => {
+      const gc = getGroupCompleteness(c);
+      for (const [gk, gv] of Object.entries(gc)) {
+        groupTotals[gk].sumPct += gv.pct;
+        groupTotals[gk].count += 1;
+      }
+      COLUMNS.forEach((col) => {
+        if (c[col.key]) fieldFill[col.key].filled += 1;
+      });
+    });
+
+    const byGroup = {};
+    for (const [gk, gt] of Object.entries(groupTotals)) {
+      byGroup[gk] = {
+        label: COLUMN_GROUPS[gk].label,
+        avgCompletion: gt.count > 0 ? Math.round(gt.sumPct / gt.count) : 0,
+      };
+    }
+
+    const byField = COLUMNS.map((col) => ({
+      key: col.key,
+      label: col.label,
+      group: col.group,
+      fillRate: total > 0 ? Math.round((fieldFill[col.key].filled / total) * 100) : 0,
+      filled: fieldFill[col.key].filled,
+      total,
+    }));
+
+    // ─── By negeri (state) breakdown ─────────────────────
+    const negeriMap = {};
+    contacts.forEach((c) => {
+      const negeri = c.state || 'Tidak Diketahui';
+      negeriMap[negeri] = (negeriMap[negeri] || 0) + 1;
+    });
+    const byNegeri = Object.entries(negeriMap)
+      .map(([negeri, count]) => ({ negeri, total: count }))
       .sort((a, b) => b.total - a.total);
 
     res.json({
@@ -261,7 +316,9 @@ router.get('/stats', async (req, res) => {
       lengkap,
       tidakLengkap,
       peratusan,
-      byNegeri: negeriBreakdown,
+      byGroup,
+      byField,
+      byNegeri: negeriMap ? byNegeri : [],
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

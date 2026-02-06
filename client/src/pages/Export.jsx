@@ -4,6 +4,7 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import { SkeletonCard } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
+import { COLUMNS } from '../config/columns';
 
 const LS_KEY = 'aihaa_crm_sheet';
 
@@ -74,22 +75,11 @@ export default function Export() {
         return;
       }
 
-      // Write enrichment columns to the sheet
+      // Write enrichment data back to Google Sheet
       const contacts = res.data.data;
-      const enrichmentData = contacts.map((c) => ({
-        poskod: c.poskod || '',
-        alamat: c.alamat || '',
-        negeri: c.negeri || '',
-        status: c.status || '',
-      }));
 
-      const result = await axios.post('/api/sheets/write', {
-        values: [
-          ['Poskod', 'Alamat', 'Negeri', 'Status', 'Last_Updated'],
-          ...enrichmentData.map((d) => [
-            d.poskod, d.alamat, d.negeri, d.status, new Date().toISOString(),
-          ]),
-        ],
+      const result = await axios.post(`/api/sheets/write?${qp}`, {
+        data: contacts,
       });
 
       if (result.data.success) {
@@ -118,16 +108,12 @@ export default function Export() {
       }
 
       const contacts = res.data.data;
-      const headers = ['#', 'Nama', 'Telefon', 'Alamat', 'City', 'Negeri', 'Poskod', 'Status'];
+      const headers = ['#', ...COLUMNS.map((col) => col.label), 'Status'];
+      const esc = (v) => `"${(v || '').toString().replace(/\n/g, ' ').replace(/"/g, '""')}"`;
       const rows = contacts.map((c) => [
         c.id,
-        `"${(c.nama || '').replace(/"/g, '""')}"`,
-        `"${(c.telefon || '').replace(/"/g, '""')}"`,
-        `"${(c.alamat || '').replace(/\n/g, ' ').replace(/"/g, '""')}"`,
-        `"${(c.city || '').replace(/"/g, '""')}"`,
-        `"${(c.negeri || '').replace(/"/g, '""')}"`,
-        `"${c.poskod || ''}"`,
-        `"${c.status || ''}"`,
+        ...COLUMNS.map((col) => esc(c[col.key])),
+        esc(c.status),
       ]);
 
       // BOM + CSV content (Excel will open with correct encoding)
@@ -231,7 +217,7 @@ export default function Export() {
             </div>
           </div>
           <p className="text-xs text-gray-500 mb-4">
-            Data enrichment (Poskod, Alamat, Negeri, Status) akan ditambah sebagai kolum baru. Data asal tidak diubah.
+            Kolum enrichment yang belum wujud akan ditambah ke sheet. Data asal tidak diubah.
           </p>
           <button
             onClick={handleSync}
@@ -342,12 +328,13 @@ export default function Export() {
               <tbody>
                 {preview.map((c) => {
                   const isLengkap = c.status === 'Lengkap';
+                  const nama = [c.firstname, c.lastname].filter(Boolean).join(' ') || '-';
                   return (
                     <tr key={c.id} className="border-b border-gray-100">
-                      <td className="px-4 py-2.5 font-medium text-gray-900">{c.nama}</td>
-                      <td className="px-4 py-2.5 text-gray-600">{c.telefon}</td>
-                      <td className="px-4 py-2.5 text-gray-600">{c.negeri || '-'}</td>
-                      <td className="px-4 py-2.5 text-gray-600">{c.poskod || '-'}</td>
+                      <td className="px-4 py-2.5 font-medium text-gray-900">{nama}</td>
+                      <td className="px-4 py-2.5 text-gray-600">{c.contact_phone || '-'}</td>
+                      <td className="px-4 py-2.5 text-gray-600">{c.state || '-'}</td>
+                      <td className="px-4 py-2.5 text-gray-600">{c.zip || '-'}</td>
                       <td className="px-4 py-2.5">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${isLengkap ? 'bg-success-light text-success' : 'bg-warning-light text-warning'}`}>
                           {isLengkap ? 'Lengkap' : 'Tidak Lengkap'}

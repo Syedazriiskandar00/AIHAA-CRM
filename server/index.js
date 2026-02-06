@@ -14,15 +14,11 @@ app.use(express.urlencoded({ extended: true }));
 
 // Routes
 const sheetsRoutes = require('./routes/sheets');
-const enrichmentRoutes = require('./routes/enrichment');
-const uploadRoutes = require('./routes/upload');
 const testConnectionRoute = require('./routes/testConnection');
 const contactsRoutes = require('./routes/contacts');
 const importUrlRoutes = require('./routes/importUrl');
 
 app.use('/api/sheets', sheetsRoutes);
-app.use('/api/enrichment', enrichmentRoutes);
-app.use('/api/upload', uploadRoutes);
 app.use('/api/test-connection', testConnectionRoute);
 app.use('/api/contacts', contactsRoutes);
 app.use('/api/import', importUrlRoutes);

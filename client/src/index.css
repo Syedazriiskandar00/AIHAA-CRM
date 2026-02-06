@@ -16,6 +16,14 @@
   --color-warning-light: #fff3cd;
   --color-danger: #dc3545;
   --color-danger-light: #f8d7da;
+
+  /* Column group colors */
+  --color-group-personal: #3B82F6;
+  --color-group-company: #22C55E;
+  --color-group-location: #EAB308;
+  --color-group-billing: #F97316;
+  --color-group-shipping: #A855F7;
+  --color-group-business: #6B7280;
 }
 
 body {
@@ -59,4 +67,23 @@ body {
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   border-radius: 4px;
+}
+
+/* Sticky column shadow for horizontal scroll tables */
+.sticky-col {
+  position: sticky;
+  z-index: 10;
+}
+.sticky-col-shadow::after {
+  content: '';
+  position: absolute;
+  right: -4px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: linear-gradient(to right, rgba(0,0,0,0.06), transparent);
+  pointer-events: none;
+}
+thead .sticky-col {
+  z-index: 20;
 }

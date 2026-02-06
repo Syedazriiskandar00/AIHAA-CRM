@@ -1,6 +1,7 @@
 const { google } = require('googleapis');
 const path = require('path');
 const fs = require('fs');
+const { COLUMNS, ALL_HEADERS } = require('../config/columns');
 
 // ─── Credentials ────────────────────────────────────────────
 const CREDENTIALS_PATH = path.join(__dirname, '..', '..', 'credentials.json');
@@ -92,7 +93,8 @@ function wrapError(error) {
 }
 
 // ─── Column helpers ─────────────────────────────────────────
-const ENRICHMENT_HEADERS = ['Poskod', 'Alamat', 'Negeri', 'Status', 'Last_Updated'];
+// Legacy enrichment headers (kept for backward compatibility)
+const ENRICHMENT_HEADERS = ALL_HEADERS;
 
 function colIndexToLetter(index) {
   let letter = '';
@@ -138,7 +140,7 @@ async function readSheet(spreadsheetId, sheetName) {
 }
 
 // ─── writeSheet ─────────────────────────────────────────────
-// Tulis enrichment columns BARU di sebelah kanan data sedia ada.
+// Tulis columns ke sebelah kanan data sedia ada.
 // Tidak akan overwrite kolum yang sudah wujud.
 async function writeSheet(spreadsheetId, sheetName, data, startColumn) {
   try {
@@ -159,15 +161,15 @@ async function writeSheet(spreadsheetId, sheetName, data, startColumn) {
       startColIndex = existingHeaders.length;
     }
 
-    // Filter enrichment headers — hanya tambah yang belum wujud
-    const newHeaders = ENRICHMENT_HEADERS.filter(
+    // Filter headers — hanya tambah yang belum wujud
+    const newHeaders = ALL_HEADERS.filter(
       (h) => !existingHeaders.includes(h)
     );
 
     if (newHeaders.length === 0) {
       // Semua header sudah wujud, return info sahaja
       return {
-        message: 'Semua enrichment columns sudah wujud dalam sheet.',
+        message: 'Semua columns sudah wujud dalam sheet.',
         existingHeaders,
         startColumn: colIndexToLetter(startColIndex),
       };
@@ -187,12 +189,16 @@ async function writeSheet(spreadsheetId, sheetName, data, startColumn) {
 
     // Tulis data rows jika ada
     if (data && data.length > 0) {
+      // Build field key for each new header
+      const headerToKey = {};
+      COLUMNS.forEach((col) => {
+        headerToKey[col.label] = col.key;
+      });
+
       const rows = data.map((row) => {
         return newHeaders.map((h) => {
-          if (h === 'Last_Updated') {
-            return new Date().toISOString();
-          }
-          const key = h.toLowerCase();
+          const key = headerToKey[h];
+          if (!key) return '';
           return row[key] || row[h] || '';
         });
       });
@@ -207,7 +213,7 @@ async function writeSheet(spreadsheetId, sheetName, data, startColumn) {
     }
 
     return {
-      message: `${newHeaders.length} enrichment columns ditambah.`,
+      message: `${newHeaders.length} columns ditambah.`,
       addedHeaders: newHeaders,
       startColumn: headerStartCol,
       rowsWritten: data ? data.length : 0,
@@ -218,8 +224,8 @@ async function writeSheet(spreadsheetId, sheetName, data, startColumn) {
 }
 
 // ─── updateRows ─────────────────────────────────────────────
-// updates = [{ row: 2, poskod: "50000", alamat: "...", negeri: "Selangor", status: "..." }, ...]
-// Update specific cells sahaja berdasarkan row number. Tambah timestamp.
+// updates = [{ row: 2, firstname: "Ali", lastname: "Bin Abu", ... }, ...]
+// Update specific cells sahaja berdasarkan row number.
 async function updateRows(spreadsheetId, sheetName, updates) {
   try {
     const sheets = await getClient();
@@ -237,8 +243,20 @@ async function updateRows(spreadsheetId, sheetName, updates) {
       headerMap[h] = idx;
     });
 
-    // Pastikan enrichment headers wujud; jika tak, tambah dulu
-    const missingHeaders = ENRICHMENT_HEADERS.filter((h) => !(h in headerMap));
+    // Build dynamic field mapping from column config
+    // Maps field key → sheet header label
+    const fieldMapping = {};
+    COLUMNS.forEach((col) => {
+      fieldMapping[col.key] = col.label;
+    });
+    // Legacy aliases
+    fieldMapping['poskod'] = 'Zip';
+    fieldMapping['alamat'] = 'Address';
+    fieldMapping['negeri'] = 'State';
+    fieldMapping['status'] = 'Client type';
+
+    // Pastikan all 42 headers wujud; jika tak, tambah yang missing
+    const missingHeaders = ALL_HEADERS.filter((h) => !(h in headerMap));
     if (missingHeaders.length > 0) {
       const startIdx = headers.length;
       const startCol = colIndexToLetter(startIdx);
@@ -259,14 +277,6 @@ async function updateRows(spreadsheetId, sheetName, updates) {
 
     // Bina batch update data
     const batchData = [];
-    const timestamp = new Date().toISOString();
-
-    const fieldMapping = {
-      poskod: 'Poskod',
-      alamat: 'Alamat',
-      negeri: 'Negeri',
-      status: 'Status',
-    };
 
     for (const update of updates) {
       const row = update.row;
@@ -281,15 +291,6 @@ async function updateRows(spreadsheetId, sheetName, updates) {
             values: [[update[inputKey]]],
           });
         }
-      }
-
-      // Tambah timestamp di Last_Updated
-      if (headerMap['Last_Updated'] !== undefined) {
-        const col = colIndexToLetter(headerMap['Last_Updated']);
-        batchData.push({
-          range: `${sheetName}!${col}${row}`,
-          values: [[timestamp]],
-        });
       }
     }
 
@@ -310,7 +311,6 @@ async function updateRows(spreadsheetId, sheetName, updates) {
       message: `${updates.length} baris dikemaskini.`,
       updatedRows: updates.length,
       cellsUpdated: batchData.length,
-      timestamp,
     };
   } catch (error) {
     throw wrapError(error);
@@ -369,4 +369,5 @@ module.exports = {
   getClient,
   getServiceAccountEmail,
   ENRICHMENT_HEADERS,
+  ALL_HEADERS,
 };
