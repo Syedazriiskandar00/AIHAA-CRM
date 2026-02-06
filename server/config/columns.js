@@ -63,21 +63,23 @@ COLUMNS.forEach((col) => {
 });
 
 // ─── Old header → key mapping (legacy Bukku/CRM sheets) ──────
+// PRIMARY fields: always written
+// FALLBACK fields (fallback: true): only written if target field is still empty
 const OLD_HEADER_MAP = {
   '$':                     { field: 'id_asal', meta: true },
   'Legal Name (1) *':      { splitTo: ['firstname', 'lastname'] },
   'Contact No. (14)':      { field: 'contact_phone' },
   'Street +':              { field: 'address' },
+  'City':                  { field: 'city' },
   'State (17)':            { field: 'state' },
   'Postcode':              { field: 'zip' },
   'Tags (21)':             { field: 'tags', meta: true },
   'Myinvois Action (22)':  { field: 'myinvois_action', meta: true },
   'Status':                { field: 'client_type' },
   'Last_Updated':          { field: 'last_updated', meta: true },
-  'Alamat':                { field: 'address' },
-  'Negeri':                { field: 'state' },
-  'Poskod':                { field: 'zip' },
-  'City':                  { field: 'city' },
+  'Poskod':                { field: 'zip',     fallback: true },
+  'Alamat':                { field: 'address', fallback: true },
+  'Negeri':                { field: 'state',   fallback: true },
   'Name (Company Name)':   { field: 'company_name' },
   'Name (Company)':        { field: 'company_name' },
 };

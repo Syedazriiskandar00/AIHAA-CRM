@@ -71,6 +71,8 @@ function mapRow(rawRow, headerMapping, sheetHeaders) {
       // Metadata — not one of 42 columns
       contact._meta[mapping.field] = val;
     } else {
+      // Fallback fields: only write if target field is still empty
+      if (mapping.fallback && contact[mapping.field]) continue;
       contact[mapping.field] = val;
     }
   }

@@ -198,6 +198,8 @@ function mapRowForAutoDetect(rawRow, headerMapping, oldFormat) {
     } else if (mapping.meta) {
       // Skip metadata fields
     } else {
+      // Fallback fields: only write if target field is still empty
+      if (mapping.fallback && contact[mapping.field]) continue;
       contact[mapping.field] = val;
     }
   }
