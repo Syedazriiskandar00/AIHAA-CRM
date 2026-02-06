@@ -140,7 +140,8 @@ function getGroupCompleteness(contact) {
 router.get('/', async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 50));
+    // No upper cap — export needs all rows (9000+). Default 50 for normal browsing.
+    const limit = Math.max(1, parseInt(req.query.limit) || 50);
     const search = (req.query.search || '').trim().toLowerCase();
 
     const { headers, data } = await readSheet(getSpreadsheetId(req), getSheetName(req));

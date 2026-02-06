@@ -52,6 +52,9 @@ if (require('fs').existsSync(clientDist)) {
   });
 }
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
+// Allow long-running requests (export CSV can take minutes for 9000+ rows)
+server.timeout = 300000;       // 5 min
+server.keepAliveTimeout = 300000;

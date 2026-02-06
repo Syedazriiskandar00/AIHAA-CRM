@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { readSheet, listSheets } = require('../services/sheetsService');
+const { readSheet, listSheets, getClient } = require('../services/sheetsService');
 const { COLUMNS, buildHeaderMap, isOldFormat, SMART_COPY_RULES, OLD_FORMAT_DEFAULTS } = require('../config/columns');
 
 // Dynamic: guna query param jika ada, fallback ke env
@@ -8,7 +8,6 @@ const getSpreadsheetId = (req) => req.query.spreadsheetId || process.env.SPREADS
 const getSheetName = (req) => req.query.sheetName || process.env.SHEET_NAME || 'Worksheet';
 
 // ─── Fields that Excel may convert to scientific notation ────
-// These fields will be wrapped as ="value" in CSV so Excel treats as text
 const NUMERIC_TEXT_FIELDS = new Set([
   'contact_phone', 'phonenumber',
   'zip', 'billing_zip', 'shipping_zip',
@@ -92,14 +91,11 @@ function isLengkap(contact) {
 }
 
 // ─── CSV escape ──────────────────────────────────────────────
-// For phone/zip fields: use ="value" format so Excel treats as text
-// For other fields: standard CSV escaping with double quotes
 function csvEscape(v, fieldKey) {
   const str = (v || '').toString();
   if (!str) return '';
 
   // Phone, zip, ID fields: force Excel text format with ="value"
-  // This prevents Excel converting "60103625148" to "6.02E+10"
   if (fieldKey && NUMERIC_TEXT_FIELDS.has(fieldKey) && /^\d{3,}$/.test(str)) {
     return '="' + str + '"';
   }
@@ -111,77 +107,245 @@ function csvEscape(v, fieldKey) {
   return str;
 }
 
+// ─── Resolve actual sheet name from spreadsheet ──────────────
+async function resolveSheetName(spreadsheetId, requestedName) {
+  const sheets = await listSheets(spreadsheetId);
+  const names = sheets.map((s) => s.title);
+  console.log('[EXPORT] Available sheets in spreadsheet:', JSON.stringify(names));
+
+  // Exact match (case-insensitive)
+  const match = names.find((n) => n.toLowerCase() === requestedName.toLowerCase());
+  if (match) return match;
+
+  // Not found — use first sheet
+  if (names.length > 0) {
+    console.log(`[EXPORT] WARNING: Sheet "${requestedName}" NOT FOUND. Using first sheet: "${names[0]}"`);
+    return names[0];
+  }
+
+  return requestedName;
+}
+
 // ═══════════════════════════════════════════════════════════
-// GET /api/export/csv — Download ALL data as CSV file
-// No pagination limit. Returns full dataset.
+// GET /api/export/debug — Diagnostic: check Google Sheet data
+// Shows row counts, sheet names, first/last rows
 // ═══════════════════════════════════════════════════════════
-router.get('/csv', async (req, res) => {
+router.get('/debug', async (req, res) => {
+  const report = { timestamp: new Date().toISOString(), steps: [] };
+
   try {
     const spreadsheetId = getSpreadsheetId(req);
-    let sheetName = getSheetName(req);
+    report.spreadsheetId = spreadsheetId;
 
-    // ─── Auto-detect sheet name ──────────────────────────
-    try {
-      const sheets = await listSheets(spreadsheetId);
-      const names = sheets.map((s) => s.title);
-      console.log('[EXPORT] Available sheets:', JSON.stringify(names));
-
-      // Check if requested sheet exists
-      const match = names.find((n) => n.toLowerCase() === sheetName.toLowerCase());
-      if (match) {
-        sheetName = match; // Use exact casing from sheet
-      } else if (names.length > 0) {
-        console.log(`[EXPORT] Sheet "${sheetName}" not found, using first sheet: "${names[0]}"`);
-        sheetName = names[0];
-      }
-    } catch (listErr) {
-      console.log('[EXPORT] Could not list sheets, using provided name:', sheetName, listErr.message);
+    if (!spreadsheetId) {
+      report.error = 'No spreadsheetId provided (query param or env var)';
+      return res.json(report);
     }
 
-    console.log(`[EXPORT] Reading ALL rows from sheet: "${sheetName}"`);
+    // Step 1: List all sheets
+    report.steps.push('1. Listing all sheets...');
+    const sheets = await listSheets(spreadsheetId);
+    report.sheets = sheets.map((s) => s.title);
+    report.steps.push(`   Found ${sheets.length} sheet(s): ${JSON.stringify(report.sheets)}`);
 
-    // Read ALL rows — UNFORMATTED_VALUE to get raw numbers (not "6.02E+10")
-    const { headers, data, totalRows } = await readSheet(spreadsheetId, sheetName, {
+    // Step 2: For each sheet, get row count
+    report.sheetDetails = [];
+    for (const sheet of sheets) {
+      report.steps.push(`2. Reading sheet "${sheet.title}"...`);
+
+      try {
+        // Use raw API call to get all values
+        const client = await getClient();
+        const response = await client.spreadsheets.values.get({
+          spreadsheetId,
+          range: sheet.title,
+          valueRenderOption: 'UNFORMATTED_VALUE',
+        });
+
+        const rows = response.data.values || [];
+        const headers = rows.length > 0 ? rows[0] : [];
+        const dataRows = rows.length > 1 ? rows.length - 1 : 0;
+
+        const detail = {
+          name: sheet.title,
+          totalRowsIncludingHeader: rows.length,
+          dataRows,
+          headerCount: headers.length,
+          headers: headers.map(String),
+        };
+
+        // First data row
+        if (rows.length > 1) {
+          const firstRow = {};
+          headers.forEach((h, i) => {
+            if (rows[1][i] != null && rows[1][i] !== '') firstRow[String(h)] = String(rows[1][i]);
+          });
+          detail.firstRow = firstRow;
+        }
+
+        // Last data row
+        if (rows.length > 2) {
+          const lastRow = {};
+          const last = rows[rows.length - 1];
+          headers.forEach((h, i) => {
+            if (last[i] != null && last[i] !== '') lastRow[String(h)] = String(last[i]);
+          });
+          detail.lastRow = lastRow;
+          detail.lastRowIndex = rows.length;
+        }
+
+        report.sheetDetails.push(detail);
+        report.steps.push(`   "${sheet.title}": ${dataRows} data rows, ${headers.length} columns`);
+      } catch (sheetErr) {
+        report.sheetDetails.push({ name: sheet.title, error: sheetErr.message });
+        report.steps.push(`   ERROR reading "${sheet.title}": ${sheetErr.message}`);
+      }
+    }
+
+    // Step 3: Test readSheet function with resolved name
+    const requestedName = getSheetName(req);
+    const resolvedName = await resolveSheetName(spreadsheetId, requestedName);
+    report.steps.push(`3. Testing readSheet("${resolvedName}")...`);
+
+    const { headers, data, totalRows } = await readSheet(spreadsheetId, resolvedName, {
       valueRenderOption: 'UNFORMATTED_VALUE',
     });
 
-    console.log(`[EXPORT] Sheet headers (${headers.length}):`, JSON.stringify(headers));
-    console.log(`[EXPORT] Raw rows from Google Sheet: ${totalRows}`);
+    report.readSheetResult = {
+      requestedSheetName: requestedName,
+      resolvedSheetName: resolvedName,
+      headersFound: headers.length,
+      totalRowsReturned: totalRows,
+      dataArrayLength: data.length,
+    };
 
-    if (data.length > 0) {
-      const first = data[0];
-      const last = data[data.length - 1];
-      const sample = (row) => {
-        const s = {};
-        headers.slice(0, 5).forEach((h) => { if (row[h]) s[h] = row[h]; });
-        return s;
-      };
-      console.log(`[EXPORT] First row (#${first._rowIndex}):`, JSON.stringify(sample(first)));
-      console.log(`[EXPORT] Last row (#${last._rowIndex}):`, JSON.stringify(sample(last)));
-    }
+    report.steps.push(`   readSheet returned: ${totalRows} rows, ${headers.length} headers`);
 
+    // Step 4: Map rows and check filter
     const headerMapping = buildHeaderMap(headers);
-
-    // Map all rows
     let contacts = data.map((row) => {
       const mapped = mapRow(row, headerMapping, headers);
       mapped.status = isLengkap(mapped) ? 'Lengkap' : 'Tidak Lengkap';
       return mapped;
     });
 
-    // Filter empty rows
     const beforeFilter = contacts.length;
     contacts = contacts.filter((c) => c.firstname || c.lastname || c.contact_phone || c.email);
-    console.log(`[EXPORT] After mapping: ${beforeFilter} rows, after filter: ${contacts.length} contacts`);
+    const afterFilter = contacts.length;
+
+    report.mappingResult = {
+      beforeFilter,
+      afterFilter,
+      filteredOut: beforeFilter - afterFilter,
+    };
+
+    if (contacts.length > 0) {
+      report.mappingResult.firstContact = {
+        id: contacts[0].id,
+        firstname: contacts[0].firstname,
+        lastname: contacts[0].lastname,
+        phone: contacts[0].contact_phone,
+        zip: contacts[0].zip,
+      };
+      report.mappingResult.lastContact = {
+        id: contacts[contacts.length - 1].id,
+        firstname: contacts[contacts.length - 1].firstname,
+        lastname: contacts[contacts.length - 1].lastname,
+        phone: contacts[contacts.length - 1].contact_phone,
+        zip: contacts[contacts.length - 1].zip,
+      };
+    }
+
+    report.steps.push(`4. Mapping: ${beforeFilter} → filter → ${afterFilter} contacts`);
+    report.steps.push('DONE. All steps completed.');
+    report.success = true;
+
+    console.log('[EXPORT DEBUG]', JSON.stringify(report, null, 2));
+    res.json(report);
+  } catch (error) {
+    report.error = error.message;
+    report.stack = error.stack;
+    console.error('[EXPORT DEBUG] Error:', error);
+    res.status(500).json(report);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════
+// GET /api/export/csv — Download ALL data as CSV file
+// Reads directly from Google Sheet. NO limit. NO pagination.
+// ═══════════════════════════════════════════════════════════
+router.get('/csv', async (req, res) => {
+  try {
+    // Set timeout on this specific response — 5 minutes
+    res.setTimeout(300000);
+
+    const spreadsheetId = getSpreadsheetId(req);
+    if (!spreadsheetId) {
+      return res.status(400).json({ success: false, error: 'No spreadsheetId provided.' });
+    }
+
+    // ─── Resolve correct sheet name ──────────────────────
+    const requestedName = getSheetName(req);
+    let sheetName;
+    try {
+      sheetName = await resolveSheetName(spreadsheetId, requestedName);
+    } catch (e) {
+      console.log('[EXPORT] listSheets failed, using requested name:', requestedName);
+      sheetName = requestedName;
+    }
+
+    console.log(`[EXPORT CSV] spreadsheetId=${spreadsheetId}`);
+    console.log(`[EXPORT CSV] sheetName="${sheetName}" (requested="${requestedName}")`);
+
+    // ─── Read ALL rows directly from Google Sheet ────────
+    // UNFORMATTED_VALUE: raw numbers, no "6.02E+10"
+    // range = sheetName → reads ENTIRE sheet, NO row limit
+    const { headers, data, totalRows } = await readSheet(spreadsheetId, sheetName, {
+      valueRenderOption: 'UNFORMATTED_VALUE',
+    });
+
+    console.log(`[EXPORT CSV] Google Sheet returned: ${totalRows} data rows, ${headers.length} columns`);
+    console.log(`[EXPORT CSV] Headers: ${JSON.stringify(headers.slice(0, 10))}${headers.length > 10 ? '...' : ''}`);
+
+    if (data.length === 0) {
+      return res.status(404).json({ success: false, error: 'Sheet kosong — tiada data rows.' });
+    }
+
+    // Log first and last raw row
+    const sampleRow = (row) => {
+      const s = {};
+      for (const h of headers.slice(0, 6)) {
+        if (row[h]) s[h] = row[h];
+      }
+      return s;
+    };
+    console.log(`[EXPORT CSV] First raw row (#${data[0]._rowIndex}):`, JSON.stringify(sampleRow(data[0])));
+    console.log(`[EXPORT CSV] Last raw row (#${data[data.length - 1]._rowIndex}):`, JSON.stringify(sampleRow(data[data.length - 1])));
+
+    // ─── Map all rows to 42-column contacts ──────────────
+    const headerMapping = buildHeaderMap(headers);
+
+    let contacts = data.map((row) => {
+      const mapped = mapRow(row, headerMapping, headers);
+      mapped.status = isLengkap(mapped) ? 'Lengkap' : 'Tidak Lengkap';
+      return mapped;
+    });
+
+    // Filter out completely empty rows
+    const beforeFilter = contacts.length;
+    contacts = contacts.filter((c) => c.firstname || c.lastname || c.contact_phone || c.email);
+
+    console.log(`[EXPORT CSV] Mapped: ${beforeFilter} → filtered → ${contacts.length} contacts`);
+    console.log(`[EXPORT CSV] Total rows to export: ${contacts.length}`);
 
     if (contacts.length > 0) {
       const c1 = contacts[0];
-      const cLast = contacts[contacts.length - 1];
-      console.log(`[EXPORT] First contact: #${c1.id} ${c1.firstname} ${c1.lastname} phone=${c1.contact_phone} zip=${c1.zip}`);
-      console.log(`[EXPORT] Last contact: #${cLast.id} ${cLast.firstname} ${cLast.lastname} phone=${cLast.contact_phone} zip=${cLast.zip}`);
+      const cL = contacts[contacts.length - 1];
+      console.log(`[EXPORT CSV] First contact: #${c1.id} ${c1.firstname} ${c1.lastname} phone=${c1.contact_phone} zip=${c1.zip}`);
+      console.log(`[EXPORT CSV] Last contact:  #${cL.id} ${cL.firstname} ${cL.lastname} phone=${cL.contact_phone} zip=${cL.zip}`);
     }
 
-    // Build CSV: # + 42 column headers + Status = 44 columns
+    // ─── Build CSV ───────────────────────────────────────
     const csvHeaders = ['#', ...COLUMNS.map((col) => col.label), 'Status'];
     const csvRows = contacts.map((c) => {
       return [
@@ -191,26 +355,28 @@ router.get('/csv', async (req, res) => {
       ].join(',');
     });
 
-    // UTF-8 BOM + header + rows
+    // UTF-8 BOM + header row + data rows
     const bom = '\uFEFF';
     const csvContent = bom + [csvHeaders.join(','), ...csvRows].join('\r\n');
+    const csvBytes = Buffer.byteLength(csvContent, 'utf-8');
 
-    console.log(`[EXPORT] CSV generated: ${contacts.length} rows, ${Buffer.byteLength(csvContent, 'utf-8')} bytes`);
+    console.log(`[EXPORT CSV] CSV complete: ${contacts.length} rows, ${csvBytes} bytes (${(csvBytes / 1024 / 1024).toFixed(2)} MB)`);
 
-    // Filename with today's date
+    // ─── Send file download ──────────────────────────────
     const today = new Date().toISOString().split('T')[0];
     const filename = `Aihaa_CRM_Export_${today}.csv`;
 
-    // Set response headers for file download
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Length', Buffer.byteLength(csvContent, 'utf-8'));
-    res.setHeader('X-Total-Rows', contacts.length);
+    res.setHeader('Content-Length', csvBytes);
+    res.setHeader('X-Total-Rows', String(contacts.length));
     res.setHeader('Access-Control-Expose-Headers', 'X-Total-Rows');
+    res.setHeader('Cache-Control', 'no-cache, no-store');
 
     res.send(csvContent);
   } catch (error) {
-    console.error('[EXPORT] Error:', error.message);
+    console.error('[EXPORT CSV] FATAL ERROR:', error.message);
+    console.error('[EXPORT CSV] Stack:', error.stack);
     res.status(500).json({ success: false, error: error.message });
   }
 });
