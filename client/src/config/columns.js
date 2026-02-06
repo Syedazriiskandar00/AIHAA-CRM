@@ -6,7 +6,7 @@ export const COLUMNS = [
   { key: 'email',             label: 'Email',                group: 'personal' },
   { key: 'contact_phone',     label: 'Contact phonenumber',  group: 'personal' },
   { key: 'position',          label: 'Position',             group: 'company' },
-  { key: 'company_name',      label: 'Name (Company)',       group: 'company' },
+  { key: 'company_name',      label: 'Name',                 group: 'company' },
   { key: 'vat',               label: 'Vat',                  group: 'company' },
   { key: 'phonenumber',       label: 'Phonenumber',          group: 'company' },
   { key: 'country',           label: 'Country',              group: 'location' },
@@ -30,18 +30,18 @@ export const COLUMNS = [
   { key: 'stripe_id',         label: 'Stripe id',            group: 'business' },
   { key: 'affiliate_code',    label: 'Affiliate code',       group: 'business' },
   { key: 'loy_point',         label: 'Loy point',            group: 'business' },
-  { key: 'woo_customer',      label: 'Woo customer',         group: 'business' },
-  { key: 'woo_channel',       label: 'Woo channel',          group: 'business' },
+  { key: 'woo_customer',      label: 'Woo customer id',      group: 'business' },
+  { key: 'woo_channel',       label: 'Woo channel id',       group: 'business' },
   { key: 'client_type',       label: 'Client type',          group: 'business' },
   { key: 'balance',           label: 'Balance',              group: 'business' },
-  { key: 'balance_as',        label: 'Balance as',           group: 'business' },
+  { key: 'balance_as',        label: 'Balance as of',        group: 'business' },
   { key: 'auto_invoice',      label: 'Auto invoice',         group: 'business' },
   { key: 'email_address',     label: 'Email address',        group: 'business' },
   { key: 'is_non_individual', label: 'Is non individual',    group: 'business' },
   { key: 'bukku_id',          label: 'Bukku id',             group: 'business' },
   { key: 'birthday',          label: 'Birthday',             group: 'business' },
   { key: 'terms_conditions',  label: 'Terms & Conditions',   group: 'business' },
-  { key: 'identification',    label: 'Identification',       group: 'business' },
+  { key: 'identification',    label: 'Identification Type',  group: 'business' },
   { key: 'identification_no', label: 'Identification No',    group: 'business' },
 ];
 
@@ -152,10 +152,10 @@ export const OLD_HEADER_MAP = {
   '$':                     { field: 'id_asal', meta: true },
   'Legal Name (1) *':      { splitTo: ['firstname', 'lastname'] },
   'Contact No. (14)':      { field: 'contact_phone' },
-  'Street +':              { field: 'address', copyTo: ['billing_street'] },
-  'City':                  { field: 'city', copyTo: ['billing_city'] },
-  'State (17)':            { field: 'state', copyTo: ['billing_state'] },
-  'Postcode':              { field: 'zip', copyTo: ['billing_zip'] },
+  'Street +':              { field: 'address' },
+  'City':                  { field: 'city' },
+  'State (17)':            { field: 'state' },
+  'Postcode':              { field: 'zip' },
   'Tags (21)':             { field: 'tags', meta: true },
   'Myinvois Action (22)':  { field: 'myinvois_action', meta: true },
   'Status':                { field: 'client_type' },
@@ -164,6 +164,7 @@ export const OLD_HEADER_MAP = {
   'Negeri':                { field: 'state' },
   'Poskod':                { field: 'zip' },
   'Name (Company Name)':   { field: 'company_name' },
+  'Name (Company)':        { field: 'company_name' },
 };
 
 // NEW_HEADER_MAP: label → key
@@ -180,14 +181,13 @@ export function detectColumns(sheetHeaders) {
     const trimmed = (header || '').trim();
     if (!trimmed) continue;
 
-    // Check old format FIRST (has copyTo/splitTo enrichment)
+    // Check old format FIRST (has splitTo enrichment)
     const oldMapping = OLD_HEADER_MAP[trimmed];
     if (oldMapping) {
       if (oldMapping.splitTo) {
         oldMapping.splitTo.forEach((k) => detected.add(k));
       } else if (!oldMapping.meta) {
         detected.add(oldMapping.field);
-        if (oldMapping.copyTo) oldMapping.copyTo.forEach((k) => detected.add(k));
       }
       continue;
     }

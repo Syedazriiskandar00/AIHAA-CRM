@@ -2,14 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { readSheet, updateRows } = require('../services/sheetsService');
 const { validateContact } = require('../services/validator');
-const { COLUMNS, COLUMN_GROUPS, buildHeaderMap } = require('../config/columns');
+const { COLUMNS, COLUMN_GROUPS, buildHeaderMap, isOldFormat, SMART_COPY_RULES } = require('../config/columns');
 
 // Dynamic: guna query param jika ada, fallback ke env
 const getSpreadsheetId = (req) => req.query.spreadsheetId || process.env.SPREADSHEET_ID;
 const getSheetName = (req) => req.query.sheetName || process.env.SHEET_NAME || 'Worksheet';
 
 // ─── Row mapping with dual old/new header support ───────────
-function mapRow(rawRow, headerMapping) {
+function mapRow(rawRow, headerMapping, sheetHeaders) {
   const contact = {};
   // Initialize all 42 fields to ''
   COLUMNS.forEach((col) => {
@@ -35,11 +35,18 @@ function mapRow(rawRow, headerMapping) {
       contact._meta[mapping.field] = val;
     } else {
       contact[mapping.field] = val;
-      // Copy to linked fields
-      if (mapping.copyTo) {
-        mapping.copyTo.forEach((target) => {
-          if (!contact[target]) contact[target] = val;
-        });
+    }
+  }
+
+  // ─── Apply SMART_COPY_RULES: duplicate data to related empty fields ─
+  // Works for BOTH old and new format — if a source field has a value
+  // and any target field is empty, copy the value there.
+  for (const [sourceKey, targets] of Object.entries(SMART_COPY_RULES)) {
+    const sourceVal = contact[sourceKey];
+    if (!sourceVal) continue;
+    for (const target of targets) {
+      if (!contact[target]) {
+        contact[target] = sourceVal;
       }
     }
   }
@@ -99,7 +106,7 @@ router.get('/', async (req, res) => {
 
     // Map semua rows
     let contacts = data.map((row) => {
-      const mapped = mapRow(row, headerMapping);
+      const mapped = mapRow(row, headerMapping, headers);
       mapped.status = isLengkap(mapped) ? 'Lengkap' : 'Tidak Lengkap';
       return mapped;
     });
@@ -173,7 +180,7 @@ router.put('/bulk', async (req, res) => {
     const batchUpdates = ids.map((id) => {
       const rowNum = parseInt(id);
       const currentRow = data.find((r) => r._rowIndex === rowNum);
-      const merged = currentRow ? mapRow(currentRow, headerMapping) : {};
+      const merged = currentRow ? mapRow(currentRow, headerMapping, headers) : {};
 
       // Apply updates
       for (const [k, v] of Object.entries(validation.cleaned)) {
@@ -232,7 +239,7 @@ router.put('/:id', async (req, res) => {
     }
 
     // Merge existing + new data untuk check completeness
-    const merged = mapRow(currentRow, headerMapping);
+    const merged = mapRow(currentRow, headerMapping, headers);
     for (const [k, v] of Object.entries(validation.cleaned)) {
       merged[k] = v;
     }
@@ -267,7 +274,7 @@ router.get('/stats', async (req, res) => {
 
     const contacts = data
       .map((row) => {
-        const mapped = mapRow(row, headerMapping);
+        const mapped = mapRow(row, headerMapping, headers);
         mapped.status = isLengkap(mapped) ? 'Lengkap' : 'Tidak Lengkap';
         return mapped;
       })

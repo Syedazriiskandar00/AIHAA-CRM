@@ -14,7 +14,7 @@ import {
 } from '../config/columns';
 
 // ─── Frozen columns (always visible) ────────────────────────
-const FROZEN_KEYS = ['firstname', 'lastname'];
+const FROZEN_KEYS = ['firstname'];
 
 export default function Contacts() {
   const [contacts, setContacts] = useState([]);
@@ -317,8 +317,8 @@ export default function Contacts() {
             {/* Group color header row */}
             <thead>
               <tr className="border-b border-gray-100">
-                {/* Frozen section placeholder */}
-                <th colSpan={3} className="sticky left-0 z-20 bg-white px-3 py-1.5 text-left text-[10px] font-semibold text-gray-400 uppercase" />
+                {/* Frozen section placeholder (checkbox + firstname) */}
+                <th colSpan={2} className="sticky left-0 z-20 bg-white px-3 py-1.5 text-left text-[10px] font-semibold text-gray-400 uppercase" />
                 {groupSpans.map((span, idx) => {
                   const g = COLUMN_GROUPS[span.group];
                   return (
@@ -346,12 +346,8 @@ export default function Contacts() {
                   />
                 </th>
                 <th className="sticky left-[40px] z-20 bg-gray-50 text-left px-3 py-3 text-xs font-semibold text-gray-500 uppercase min-w-[130px] sticky-col-shadow"
-                    style={{ borderRight: '1px solid #e5e7eb' }}>
-                  Firstname
-                </th>
-                <th className="sticky left-[170px] z-20 bg-gray-50 text-left px-3 py-3 text-xs font-semibold text-gray-500 uppercase min-w-[130px] sticky-col-shadow"
                     style={{ borderRight: '2px solid #e5e7eb' }}>
-                  Lastname
+                  Firstname
                 </th>
                 {visibleColumns.map((col) => (
                   <th
@@ -417,25 +413,13 @@ export default function Contacts() {
 
                       {/* Firstname - frozen */}
                       <td className="sticky left-[40px] z-10 bg-inherit px-3 py-2 sticky-col-shadow"
-                          style={{ borderRight: '1px solid #f3f4f6' }}>
+                          style={{ borderRight: '2px solid #f3f4f6' }}>
                         <input
                           type="text"
                           value={displayVal(contact, 'firstname')}
                           onChange={(e) => setField(contact.id, 'firstname', e.target.value)}
-                          placeholder="—"
-                          className="w-full px-2 py-1 text-sm font-medium border border-transparent rounded hover:border-gray-300 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none bg-transparent placeholder:text-gray-300 placeholder:text-xs"
-                        />
-                      </td>
-
-                      {/* Lastname - frozen */}
-                      <td className="sticky left-[170px] z-10 bg-inherit px-3 py-2 sticky-col-shadow"
-                          style={{ borderRight: '2px solid #f3f4f6' }}>
-                        <input
-                          type="text"
-                          value={displayVal(contact, 'lastname')}
-                          onChange={(e) => setField(contact.id, 'lastname', e.target.value)}
-                          placeholder="—"
-                          className="w-full px-2 py-1 text-sm border border-transparent rounded hover:border-gray-300 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none bg-transparent placeholder:text-gray-300 placeholder:text-xs"
+                          placeholder=""
+                          className="w-full px-2 py-1 text-sm font-medium border border-transparent rounded hover:border-gray-300 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none bg-transparent"
                         />
                       </td>
 
@@ -583,8 +567,8 @@ function EditableCell({ value, column, onChange }) {
       type={inputType}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      placeholder="—"
-      className="w-full px-2 py-1 text-sm border border-transparent rounded hover:border-gray-300 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none bg-transparent min-w-[100px] placeholder:text-gray-300 placeholder:text-xs"
+      placeholder=""
+      className="w-full px-2 py-1 text-sm border border-transparent rounded hover:border-gray-300 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none bg-transparent min-w-[100px]"
     />
   );
 }
