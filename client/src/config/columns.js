@@ -6,7 +6,7 @@ export const COLUMNS = [
   { key: 'email',             label: 'Email',                group: 'personal' },
   { key: 'contact_phone',     label: 'Contact phonenumber',  group: 'personal' },
   { key: 'position',          label: 'Position',             group: 'company' },
-  { key: 'company_name',      label: 'Name (Company Name)',  group: 'company' },
+  { key: 'company_name',      label: 'Name (Company)',       group: 'company' },
   { key: 'vat',               label: 'Vat',                  group: 'company' },
   { key: 'phonenumber',       label: 'Phonenumber',          group: 'company' },
   { key: 'country',           label: 'Country',              group: 'location' },
@@ -14,7 +14,7 @@ export const COLUMNS = [
   { key: 'zip',               label: 'Zip',                  group: 'location' },
   { key: 'state',             label: 'State',                group: 'location' },
   { key: 'address',           label: 'Address',              group: 'location' },
-  { key: 'website',           label: 'Website',              group: 'location' },
+  { key: 'website',           label: 'Website',              group: 'online' },
   { key: 'billing_street',    label: 'Billing street',       group: 'billing' },
   { key: 'billing_city',      label: 'Billing city',         group: 'billing' },
   { key: 'billing_state',     label: 'Billing state',        group: 'billing' },
@@ -25,8 +25,8 @@ export const COLUMNS = [
   { key: 'shipping_state',    label: 'Shipping state',       group: 'shipping' },
   { key: 'shipping_zip',      label: 'Shipping zip',         group: 'shipping' },
   { key: 'shipping_country',  label: 'Shipping country',     group: 'shipping' },
-  { key: 'longitude',         label: 'Longitude',            group: 'business' },
-  { key: 'latitude',          label: 'Latitude',             group: 'business' },
+  { key: 'longitude',         label: 'Longitude',            group: 'online' },
+  { key: 'latitude',          label: 'Latitude',             group: 'online' },
   { key: 'stripe_id',         label: 'Stripe id',            group: 'business' },
   { key: 'affiliate_code',    label: 'Affiliate code',       group: 'business' },
   { key: 'loy_point',         label: 'Loy point',            group: 'business' },
@@ -85,6 +85,14 @@ export const COLUMN_GROUPS = {
     text: 'text-purple-700',
     border: 'border-purple-200',
     headerBg: 'bg-purple-100/60',
+  },
+  online: {
+    label: 'Online',
+    color: '#06B6D4',
+    bg: 'bg-cyan-50',
+    text: 'text-cyan-700',
+    border: 'border-cyan-200',
+    headerBg: 'bg-cyan-100/60',
   },
   business: {
     label: 'Business',
@@ -155,6 +163,7 @@ export const OLD_HEADER_MAP = {
   'Alamat':                { field: 'address' },
   'Negeri':                { field: 'state' },
   'Poskod':                { field: 'zip' },
+  'Name (Company Name)':   { field: 'company_name' },
 };
 
 // NEW_HEADER_MAP: label → key

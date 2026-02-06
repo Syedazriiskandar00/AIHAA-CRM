@@ -44,9 +44,6 @@ function mapRow(rawRow, headerMapping) {
     }
   }
 
-  // Default country to Malaysia if empty
-  if (!contact.country) contact.country = 'Malaysia';
-
   contact.id = rawRow._rowIndex;
   return contact;
 }
@@ -89,12 +86,33 @@ router.get('/', async (req, res) => {
     const { headers, data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
     const headerMapping = buildHeaderMap(headers);
 
+    // Debug: log headers and first 3 rows on first page request
+    if (page === 1) {
+      console.log('[DEBUG] Sheet headers:', JSON.stringify(headers));
+      console.log('[DEBUG] Header mapping:', JSON.stringify(headerMapping));
+      for (let i = 0; i < Math.min(3, data.length); i++) {
+        const raw = {};
+        headers.forEach((h) => { if (data[i][h]) raw[h] = data[i][h]; });
+        console.log('[DEBUG] Raw row ' + data[i]._rowIndex + ':', JSON.stringify(raw));
+      }
+    }
+
     // Map semua rows
     let contacts = data.map((row) => {
       const mapped = mapRow(row, headerMapping);
       mapped.status = isLengkap(mapped) ? 'Lengkap' : 'Tidak Lengkap';
       return mapped;
     });
+
+    // Debug: log first 3 mapped contacts
+    if (page === 1) {
+      for (let i = 0; i < Math.min(3, contacts.length); i++) {
+        const c = contacts[i];
+        const filled = {};
+        COLUMNS.forEach((col) => { if (c[col.key]) filled[col.key] = c[col.key]; });
+        console.log('[DEBUG] Mapped contact #' + c.id + ':', JSON.stringify(filled));
+      }
+    }
 
     // Filter empty rows (no firstname)
     contacts = contacts.filter((c) => c.firstname || c.lastname || c.contact_phone || c.email);

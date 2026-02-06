@@ -7,7 +7,7 @@ const COLUMNS = [
   { key: 'email',             label: 'Email',                group: 'personal',  colLetter: 'C' },
   { key: 'contact_phone',     label: 'Contact phonenumber',  group: 'personal',  colLetter: 'D' },
   { key: 'position',          label: 'Position',             group: 'company',   colLetter: 'E' },
-  { key: 'company_name',      label: 'Name (Company Name)',  group: 'company',   colLetter: 'F' },
+  { key: 'company_name',      label: 'Name (Company)',       group: 'company',   colLetter: 'F' },
   { key: 'vat',               label: 'Vat',                  group: 'company',   colLetter: 'G' },
   { key: 'phonenumber',       label: 'Phonenumber',          group: 'company',   colLetter: 'H' },
   { key: 'country',           label: 'Country',              group: 'location',  colLetter: 'I' },
@@ -15,7 +15,7 @@ const COLUMNS = [
   { key: 'zip',               label: 'Zip',                  group: 'location',  colLetter: 'K' },
   { key: 'state',             label: 'State',                group: 'location',  colLetter: 'L' },
   { key: 'address',           label: 'Address',              group: 'location',  colLetter: 'M' },
-  { key: 'website',           label: 'Website',              group: 'location',  colLetter: 'N' },
+  { key: 'website',           label: 'Website',              group: 'online',    colLetter: 'N' },
   { key: 'billing_street',    label: 'Billing street',       group: 'billing',   colLetter: 'O' },
   { key: 'billing_city',      label: 'Billing city',         group: 'billing',   colLetter: 'P' },
   { key: 'billing_state',     label: 'Billing state',        group: 'billing',   colLetter: 'Q' },
@@ -26,8 +26,8 @@ const COLUMNS = [
   { key: 'shipping_state',    label: 'Shipping state',       group: 'shipping',  colLetter: 'V' },
   { key: 'shipping_zip',      label: 'Shipping zip',         group: 'shipping',  colLetter: 'W' },
   { key: 'shipping_country',  label: 'Shipping country',     group: 'shipping',  colLetter: 'X' },
-  { key: 'longitude',         label: 'Longitude',            group: 'business',  colLetter: 'Y' },
-  { key: 'latitude',          label: 'Latitude',             group: 'business',  colLetter: 'Z' },
+  { key: 'longitude',         label: 'Longitude',            group: 'online',    colLetter: 'Y' },
+  { key: 'latitude',          label: 'Latitude',             group: 'online',    colLetter: 'Z' },
   { key: 'stripe_id',         label: 'Stripe id',            group: 'business',  colLetter: 'AA' },
   { key: 'affiliate_code',    label: 'Affiliate code',       group: 'business',  colLetter: 'AB' },
   { key: 'loy_point',         label: 'Loy point',            group: 'business',  colLetter: 'AC' },
@@ -52,6 +52,7 @@ const COLUMN_GROUPS = {
   location: { label: 'Location',       color: '#EAB308' },
   billing:  { label: 'Billing',        color: '#F97316' },
   shipping: { label: 'Shipping',       color: '#A855F7' },
+  online:   { label: 'Online',         color: '#06B6D4' },
   business: { label: 'Business',       color: '#6B7280' },
 };
 
@@ -78,32 +79,48 @@ const OLD_HEADER_MAP = {
   'Alamat':                { field: 'address' },
   'Negeri':                { field: 'state' },
   'Poskod':                { field: 'zip' },
+  'Name (Company Name)':   { field: 'company_name' },
 };
 
 // All 42 column labels in order (for Google Sheets headers)
 const ALL_HEADERS = COLUMNS.map((c) => c.label);
 
+// ─── Detect if sheet uses old format ─────────────────────────
+// Only check for uniquely old-format headers (with numbers/special chars)
+// Headers like "City", "Status" are ambiguous and exist in both formats
+const OLD_ONLY_MARKERS = [
+  '$', 'Legal Name (1) *', 'Contact No. (14)', 'Street +',
+  'State (17)', 'Tags (21)', 'Myinvois Action (22)',
+];
+
+function isOldFormat(sheetHeaders) {
+  const headerSet = new Set(sheetHeaders.map((h) => (h || '').trim()));
+  return OLD_ONLY_MARKERS.some((marker) => headerSet.has(marker));
+}
+
 // ─── Build header map from actual sheet headers ─────────────
 // Returns { [headerName]: mappingInfo }
 function buildHeaderMap(sheetHeaders) {
+  const useOld = isOldFormat(sheetHeaders);
   const map = {};
+
   for (const header of sheetHeaders) {
     const trimmed = (header || '').trim();
     if (!trimmed) continue;
 
-    // 1. Try exact match on old format FIRST (has copyTo/splitTo enrichment)
-    if (OLD_HEADER_MAP[trimmed]) {
+    if (useOld && OLD_HEADER_MAP[trimmed]) {
+      // Old-format sheet: use OLD_HEADER_MAP (has copyTo/splitTo)
       map[trimmed] = OLD_HEADER_MAP[trimmed];
       continue;
     }
 
-    // 2. Try exact match on new format
+    // New-format: match against COLUMNS labels (exact)
     if (NEW_HEADER_MAP[trimmed]) {
       map[trimmed] = { field: NEW_HEADER_MAP[trimmed] };
       continue;
     }
 
-    // 3. Try case-insensitive match on new format
+    // Case-insensitive match on new format
     const lowerTrimmed = trimmed.toLowerCase();
     const newMatch = Object.entries(NEW_HEADER_MAP).find(
       ([label]) => label.toLowerCase() === lowerTrimmed
@@ -113,7 +130,7 @@ function buildHeaderMap(sheetHeaders) {
       continue;
     }
 
-    // 4. Unknown — keep as metadata
+    // Unknown — keep as metadata
     map[trimmed] = { field: trimmed.toLowerCase().replace(/[^a-z0-9]+/g, '_'), meta: true };
   }
   return map;

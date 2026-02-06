@@ -33,6 +33,7 @@ export default function Contacts() {
     location: true,
     billing: false,
     shipping: false,
+    online: false,
     business: false,
   });
   const [showEmptyOnly, setShowEmptyOnly] = useState(false);
