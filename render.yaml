@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: aihaa-crm
+    runtime: node
+    buildCommand: npm install && cd server && npm install && cd ../client && npm install && npm run build
+    startCommand: node server/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SPREADSHEET_ID
+        sync: false
+      - key: SHEET_NAME
+        value: Worksheet
+      - key: GOOGLE_CREDENTIALS
+        sync: false

@@ -1,0 +1,19 @@
+{
+  "name": "aihaa-crm",
+  "version": "1.0.0",
+  "description": "Aihaa CRM Enrichment Web App",
+  "private": true,
+  "scripts": {
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "build": "cd client && npm run build",
+    "start": "node server/index.js",
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install",
+    "render:build": "cd server && npm install && cd ../client && npm install && npm run build",
+    "encode-creds": "node -e \"console.log(require('fs').readFileSync('credentials.json').toString('base64'))\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
