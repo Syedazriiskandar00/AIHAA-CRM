@@ -107,13 +107,19 @@ function colIndexToLetter(index) {
 }
 
 // ─── readSheet ──────────────────────────────────────────────
-async function readSheet(spreadsheetId, sheetName) {
+// options.valueRenderOption: 'FORMATTED_VALUE' (default) | 'UNFORMATTED_VALUE'
+// Use UNFORMATTED_VALUE for export to get raw numbers instead of "6.02E+10"
+async function readSheet(spreadsheetId, sheetName, options = {}) {
   try {
     const sheets = await getClient();
-    const response = await sheets.spreadsheets.values.get({
+    const apiParams = {
       spreadsheetId,
       range: sheetName,
-    });
+    };
+    if (options.valueRenderOption) {
+      apiParams.valueRenderOption = options.valueRenderOption;
+    }
+    const response = await sheets.spreadsheets.values.get(apiParams);
 
     const rows = response.data.values;
 
@@ -121,13 +127,14 @@ async function readSheet(spreadsheetId, sheetName) {
       return { headers: [], data: [], totalRows: 0 };
     }
 
-    const headers = rows[0];
+    const headers = rows[0].map((h) => (h != null ? String(h) : ''));
     const data = [];
 
     for (let i = 1; i < rows.length; i++) {
       const obj = {};
       headers.forEach((header, idx) => {
-        obj[header] = rows[i][idx] || '';
+        const val = rows[i] ? rows[i][idx] : undefined;
+        obj[header] = val != null && val !== '' ? String(val) : '';
       });
       obj._rowIndex = i + 1; // 1-based sheet row number
       data.push(obj);

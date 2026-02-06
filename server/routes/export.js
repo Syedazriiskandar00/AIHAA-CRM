@@ -1,11 +1,22 @@
 const express = require('express');
 const router = express.Router();
-const { readSheet } = require('../services/sheetsService');
+const { readSheet, listSheets } = require('../services/sheetsService');
 const { COLUMNS, buildHeaderMap, isOldFormat, SMART_COPY_RULES, OLD_FORMAT_DEFAULTS } = require('../config/columns');
 
 // Dynamic: guna query param jika ada, fallback ke env
 const getSpreadsheetId = (req) => req.query.spreadsheetId || process.env.SPREADSHEET_ID;
 const getSheetName = (req) => req.query.sheetName || process.env.SHEET_NAME || 'Worksheet';
+
+// ─── Fields that Excel may convert to scientific notation ────
+// These fields will be wrapped as ="value" in CSV so Excel treats as text
+const NUMERIC_TEXT_FIELDS = new Set([
+  'contact_phone', 'phonenumber',
+  'zip', 'billing_zip', 'shipping_zip',
+  'vat', 'identification_no',
+  'stripe_id', 'bukku_id',
+  'woo_customer', 'woo_channel',
+  'loy_point',
+]);
 
 // ─── Capitalize first letter of each word ────────────────────
 function capitalizeWords(str) {
@@ -81,9 +92,19 @@ function isLengkap(contact) {
 }
 
 // ─── CSV escape ──────────────────────────────────────────────
-function csvEscape(v) {
+// For phone/zip fields: use ="value" format so Excel treats as text
+// For other fields: standard CSV escaping with double quotes
+function csvEscape(v, fieldKey) {
   const str = (v || '').toString();
-  // Wrap in quotes if contains comma, quotes, newlines
+  if (!str) return '';
+
+  // Phone, zip, ID fields: force Excel text format with ="value"
+  // This prevents Excel converting "60103625148" to "6.02E+10"
+  if (fieldKey && NUMERIC_TEXT_FIELDS.has(fieldKey) && /^\d{3,}$/.test(str)) {
+    return '="' + str + '"';
+  }
+
+  // Standard CSV: wrap in quotes if contains comma, quotes, or newlines
   if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
     return '"' + str.replace(/"/g, '""') + '"';
   }
@@ -96,8 +117,49 @@ function csvEscape(v) {
 // ═══════════════════════════════════════════════════════════
 router.get('/csv', async (req, res) => {
   try {
-    // Read ALL rows from Google Sheet
-    const { headers, data } = await readSheet(getSpreadsheetId(req), getSheetName(req));
+    const spreadsheetId = getSpreadsheetId(req);
+    let sheetName = getSheetName(req);
+
+    // ─── Auto-detect sheet name ──────────────────────────
+    try {
+      const sheets = await listSheets(spreadsheetId);
+      const names = sheets.map((s) => s.title);
+      console.log('[EXPORT] Available sheets:', JSON.stringify(names));
+
+      // Check if requested sheet exists
+      const match = names.find((n) => n.toLowerCase() === sheetName.toLowerCase());
+      if (match) {
+        sheetName = match; // Use exact casing from sheet
+      } else if (names.length > 0) {
+        console.log(`[EXPORT] Sheet "${sheetName}" not found, using first sheet: "${names[0]}"`);
+        sheetName = names[0];
+      }
+    } catch (listErr) {
+      console.log('[EXPORT] Could not list sheets, using provided name:', sheetName, listErr.message);
+    }
+
+    console.log(`[EXPORT] Reading ALL rows from sheet: "${sheetName}"`);
+
+    // Read ALL rows — UNFORMATTED_VALUE to get raw numbers (not "6.02E+10")
+    const { headers, data, totalRows } = await readSheet(spreadsheetId, sheetName, {
+      valueRenderOption: 'UNFORMATTED_VALUE',
+    });
+
+    console.log(`[EXPORT] Sheet headers (${headers.length}):`, JSON.stringify(headers));
+    console.log(`[EXPORT] Raw rows from Google Sheet: ${totalRows}`);
+
+    if (data.length > 0) {
+      const first = data[0];
+      const last = data[data.length - 1];
+      const sample = (row) => {
+        const s = {};
+        headers.slice(0, 5).forEach((h) => { if (row[h]) s[h] = row[h]; });
+        return s;
+      };
+      console.log(`[EXPORT] First row (#${first._rowIndex}):`, JSON.stringify(sample(first)));
+      console.log(`[EXPORT] Last row (#${last._rowIndex}):`, JSON.stringify(sample(last)));
+    }
+
     const headerMapping = buildHeaderMap(headers);
 
     // Map all rows
@@ -108,21 +170,32 @@ router.get('/csv', async (req, res) => {
     });
 
     // Filter empty rows
+    const beforeFilter = contacts.length;
     contacts = contacts.filter((c) => c.firstname || c.lastname || c.contact_phone || c.email);
+    console.log(`[EXPORT] After mapping: ${beforeFilter} rows, after filter: ${contacts.length} contacts`);
 
-    // Build CSV: 42 column headers + # + Status = 44 columns
+    if (contacts.length > 0) {
+      const c1 = contacts[0];
+      const cLast = contacts[contacts.length - 1];
+      console.log(`[EXPORT] First contact: #${c1.id} ${c1.firstname} ${c1.lastname} phone=${c1.contact_phone} zip=${c1.zip}`);
+      console.log(`[EXPORT] Last contact: #${cLast.id} ${cLast.firstname} ${cLast.lastname} phone=${cLast.contact_phone} zip=${cLast.zip}`);
+    }
+
+    // Build CSV: # + 42 column headers + Status = 44 columns
     const csvHeaders = ['#', ...COLUMNS.map((col) => col.label), 'Status'];
     const csvRows = contacts.map((c) => {
       return [
         c.id,
-        ...COLUMNS.map((col) => csvEscape(c[col.key])),
-        csvEscape(c.status),
+        ...COLUMNS.map((col) => csvEscape(c[col.key], col.key)),
+        csvEscape(c.status, null),
       ].join(',');
     });
 
     // UTF-8 BOM + header + rows
     const bom = '\uFEFF';
     const csvContent = bom + [csvHeaders.join(','), ...csvRows].join('\r\n');
+
+    console.log(`[EXPORT] CSV generated: ${contacts.length} rows, ${Buffer.byteLength(csvContent, 'utf-8')} bytes`);
 
     // Filename with today's date
     const today = new Date().toISOString().split('T')[0];
@@ -133,9 +206,11 @@ router.get('/csv', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Length', Buffer.byteLength(csvContent, 'utf-8'));
     res.setHeader('X-Total-Rows', contacts.length);
+    res.setHeader('Access-Control-Expose-Headers', 'X-Total-Rows');
 
     res.send(csvContent);
   } catch (error) {
+    console.error('[EXPORT] Error:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
