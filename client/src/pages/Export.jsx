@@ -4,7 +4,6 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import { SkeletonCard } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
-import { COLUMNS } from '../config/columns';
 
 const LS_KEY = 'aihaa_crm_sheet';
 
@@ -28,6 +27,7 @@ export default function Export() {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
   const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState({ phase: '', percent: 0 });
   const toast = useToast();
   const confirm = useConfirm();
 
@@ -97,43 +97,62 @@ export default function Export() {
     }
   };
 
-  // Download as Excel-compatible CSV (with BOM for UTF-8)
+  // Download ALL data as CSV via dedicated export endpoint
   const handleDownload = async () => {
     setDownloading(true);
+    setDownloadProgress({ phase: 'Sedang menyediakan fail...', percent: 0 });
     try {
-      const res = await axios.get(`/api/contacts?page=1&limit=50000&${qp}`);
-      if (!res.data.success || res.data.data.length === 0) {
-        toast.error('Tiada data untuk dimuat turun.');
-        return;
-      }
+      const totalRows = stats?.total || 0;
 
-      const contacts = res.data.data;
-      const headers = ['#', ...COLUMNS.map((col) => col.label), 'Status'];
-      const esc = (v) => `"${(v || '').toString().replace(/\n/g, ' ').replace(/"/g, '""')}"`;
-      const rows = contacts.map((c) => [
-        c.id,
-        ...COLUMNS.map((col) => esc(c[col.key])),
-        esc(c.status),
-      ]);
+      // Simulate preparation phase while server fetches from Google Sheet
+      let simPercent = 0;
+      const simTimer = setInterval(() => {
+        simPercent = Math.min(simPercent + 2, 80);
+        setDownloadProgress({
+          phase: simPercent < 40
+            ? `Memproses ${Math.round((simPercent / 80) * totalRows).toLocaleString()}/${totalRows.toLocaleString()} rows...`
+            : `Menjana fail CSV...`,
+          percent: simPercent,
+        });
+      }, 300);
 
-      // BOM + CSV content (Excel will open with correct encoding)
-      const bom = '\uFEFF';
-      const csv = bom + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const res = await axios.get(`/api/export/csv?${qp}`, {
+        responseType: 'blob',
+        timeout: 300000, // 5 minit
+        onDownloadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const pct = Math.round((progressEvent.loaded / progressEvent.total) * 100);
+            setDownloadProgress({ phase: 'Memuat turun fail...', percent: 80 + Math.round(pct * 0.2) });
+          }
+        },
+      });
+
+      clearInterval(simTimer);
+      setDownloadProgress({ phase: 'Selesai!', percent: 100 });
+
+      // Get total rows from response header
+      const rowCount = res.headers['x-total-rows'] || totalRows;
+
+      // Trigger file download
+      const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `aihaa-crm-export-${new Date().toISOString().split('T')[0]}.csv`;
+      const today = new Date().toISOString().split('T')[0];
+      a.download = `Aihaa_CRM_Export_${today}.csv`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      toast.success(`${contacts.length} contacts dimuat turun.`);
+      toast.success(`${Number(rowCount).toLocaleString()} contacts berjaya dimuat turun.`);
     } catch {
-      toast.error('Gagal muat turun.');
+      toast.error('Gagal muat turun. Sila cuba lagi.');
     } finally {
-      setDownloading(false);
+      setTimeout(() => {
+        setDownloading(false);
+        setDownloadProgress({ phase: '', percent: 0 });
+      }, 1500);
     }
   };
 
@@ -276,13 +295,30 @@ export default function Export() {
               </svg>
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-gray-800">Download Excel</h3>
-              <p className="text-xs text-gray-400">Muat turun sebagai fail CSV</p>
+              <h3 className="text-sm font-semibold text-gray-800">Download Excel (.csv)</h3>
+              <p className="text-xs text-gray-400">Muat turun SEMUA {stats?.total?.toLocaleString()} rows dalam satu fail</p>
             </div>
           </div>
           <p className="text-xs text-gray-500 mb-4">
-            Fail CSV serasi dengan Excel dan Google Sheets. Mengandungi semua data contacts dan status enrichment.
+            Fail CSV (UTF-8 BOM) serasi dengan Excel dan Google Sheets. Mengandungi semua {stats?.total?.toLocaleString()} contacts dengan 42 columns + status.
           </p>
+
+          {/* Progress bar — shown during download */}
+          {downloading && (
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs font-medium text-primary">{downloadProgress.phase}</span>
+                <span className="text-xs font-bold text-primary">{downloadProgress.percent}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-primary h-2 rounded-full transition-all duration-300 ease-out"
+                  style={{ width: `${downloadProgress.percent}%` }}
+                />
+              </div>
+            </div>
+          )}
+
           <button
             onClick={handleDownload}
             disabled={downloading}
@@ -294,7 +330,7 @@ export default function Export() {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
-                Memuat turun...
+                Sedang memproses...
               </>
             ) : (
               <>

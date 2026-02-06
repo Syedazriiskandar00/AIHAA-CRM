@@ -18,12 +18,19 @@ const testConnectionRoute = require('./routes/testConnection');
 const contactsRoutes = require('./routes/contacts');
 const importUrlRoutes = require('./routes/importUrl');
 const geocodeRoutes = require('./routes/geocode');
+const exportRoutes = require('./routes/export');
 
 app.use('/api/sheets', sheetsRoutes);
 app.use('/api/test-connection', testConnectionRoute);
 app.use('/api/contacts', contactsRoutes);
 app.use('/api/import', importUrlRoutes);
 app.use('/api/geocode', geocodeRoutes);
+// Export route with extended timeout (5 minutes) for large datasets
+app.use('/api/export', (req, res, next) => {
+  req.setTimeout(300000);
+  res.setTimeout(300000);
+  next();
+}, exportRoutes);
 app.use('/api/stats', (req, res, next) => {
   // Proxy /api/stats ke contacts router /stats
   req.url = '/stats';
