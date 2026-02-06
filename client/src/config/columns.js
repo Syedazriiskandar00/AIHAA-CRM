@@ -171,13 +171,7 @@ export function detectColumns(sheetHeaders) {
     const trimmed = (header || '').trim();
     if (!trimmed) continue;
 
-    // Check new format
-    if (NEW_HEADER_MAP[trimmed]) {
-      detected.add(NEW_HEADER_MAP[trimmed]);
-      continue;
-    }
-
-    // Check old format
+    // Check old format FIRST (has copyTo/splitTo enrichment)
     const oldMapping = OLD_HEADER_MAP[trimmed];
     if (oldMapping) {
       if (oldMapping.splitTo) {
@@ -186,6 +180,12 @@ export function detectColumns(sheetHeaders) {
         detected.add(oldMapping.field);
         if (oldMapping.copyTo) oldMapping.copyTo.forEach((k) => detected.add(k));
       }
+      continue;
+    }
+
+    // Check new format
+    if (NEW_HEADER_MAP[trimmed]) {
+      detected.add(NEW_HEADER_MAP[trimmed]);
       continue;
     }
 

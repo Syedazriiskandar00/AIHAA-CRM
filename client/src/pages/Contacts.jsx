@@ -421,8 +421,8 @@ export default function Contacts() {
                           type="text"
                           value={displayVal(contact, 'firstname')}
                           onChange={(e) => setField(contact.id, 'firstname', e.target.value)}
-                          placeholder="Firstname"
-                          className="w-full px-2 py-1 text-sm font-medium border border-transparent rounded hover:border-gray-300 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none bg-transparent"
+                          placeholder="—"
+                          className="w-full px-2 py-1 text-sm font-medium border border-transparent rounded hover:border-gray-300 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none bg-transparent placeholder:text-gray-300 placeholder:text-xs"
                         />
                       </td>
 
@@ -433,8 +433,8 @@ export default function Contacts() {
                           type="text"
                           value={displayVal(contact, 'lastname')}
                           onChange={(e) => setField(contact.id, 'lastname', e.target.value)}
-                          placeholder="Lastname"
-                          className="w-full px-2 py-1 text-sm border border-transparent rounded hover:border-gray-300 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none bg-transparent"
+                          placeholder="—"
+                          className="w-full px-2 py-1 text-sm border border-transparent rounded hover:border-gray-300 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none bg-transparent placeholder:text-gray-300 placeholder:text-xs"
                         />
                       </td>
 
@@ -582,8 +582,8 @@ function EditableCell({ value, column, onChange }) {
       type={inputType}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      placeholder={column.label}
-      className="w-full px-2 py-1 text-sm border border-transparent rounded hover:border-gray-300 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none bg-transparent min-w-[100px]"
+      placeholder="—"
+      className="w-full px-2 py-1 text-sm border border-transparent rounded hover:border-gray-300 focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none bg-transparent min-w-[100px] placeholder:text-gray-300 placeholder:text-xs"
     />
   );
 }

@@ -91,15 +91,15 @@ function buildHeaderMap(sheetHeaders) {
     const trimmed = (header || '').trim();
     if (!trimmed) continue;
 
-    // 1. Try exact match on new format
-    if (NEW_HEADER_MAP[trimmed]) {
-      map[trimmed] = { field: NEW_HEADER_MAP[trimmed] };
+    // 1. Try exact match on old format FIRST (has copyTo/splitTo enrichment)
+    if (OLD_HEADER_MAP[trimmed]) {
+      map[trimmed] = OLD_HEADER_MAP[trimmed];
       continue;
     }
 
-    // 2. Try exact match on old format
-    if (OLD_HEADER_MAP[trimmed]) {
-      map[trimmed] = OLD_HEADER_MAP[trimmed];
+    // 2. Try exact match on new format
+    if (NEW_HEADER_MAP[trimmed]) {
+      map[trimmed] = { field: NEW_HEADER_MAP[trimmed] };
       continue;
     }
 
